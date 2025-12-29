@@ -3,10 +3,13 @@ import logging
 import os
 from dotenv import load_dotenv
 from nio import AsyncClient, RoomMessageText
+from bot.filters import is_whatsapp_room
+
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("sidecar")
 logging.getLogger("nio.responses").setLevel(logging.ERROR)
+
 def load_config():
     load_dotenv()
 
@@ -51,10 +54,16 @@ async def setup_client():
 
     return client
 
+def on_message(room, event):
+    if not is_whatsapp_room(room):
+        return  # Ignore non-WhatsApp rooms
 
+    text = event.body
+    sender = event.sender
+    room_name = room.display_name or "WhatsApp"
 
-
-
+    log.info(f"[WA] {room_name} | {sender}: {text[:120]}")
+    
 async def main():
     client = await setup_client()
 
