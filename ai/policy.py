@@ -10,9 +10,20 @@
 
 #     return "IGNORE"
 
-def decide(label: str) -> str:
-    if label in ("ENQUIRY", "INTENT"):
+def decide(label: str, confidence: float) -> str:
+    """
+    Returns one of:
+    NOTIFY
+    ESCALATE
+    IGNORE
+    """
+    if confidence < 0.6:
+        return "IGNORE"
+
+    if label == "ENQUIRY":
         return "NOTIFY"
-    if label == "PROMOTION":
-        return "SUPPRESS"
+
+    if label == "SUPPORT":
+        return "ESCALATE"
+
     return "IGNORE"

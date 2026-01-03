@@ -11,10 +11,16 @@
 #         return "PROMOTION"
 #     return "GENERAL"
 
+
 from ai.classifier import classify
 from ai.policy import decide
 
-def run_pipeline(text: str) -> str:
-    label = classify(text)
-    action = decide(label)
-    return f"{label}:{action}"
+def run_pipeline(text: str):
+    label, confidence = classify(text)
+    action = decide(label, confidence)
+
+    return {
+        "label": label,
+        "confidence": confidence,
+        "action": action,
+    }

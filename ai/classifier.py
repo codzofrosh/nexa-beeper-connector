@@ -24,14 +24,16 @@
 #         "confidence": 0.7 if intent != "other" else 0.3,
 #     }
 
-def classify(text: str) -> str:
+def classify(text: str) -> tuple [str, float]:
     text = text.lower()
 
+    if not text:
+        return "UNKNOWN", 0.0
     if any(k in text for k in ["price", "cost", "pricing"]):
-        return "ENQUIRY"
+        return "ENQUIRY",0.85
     if any(k in text for k in ["buy", "order", "purchase"]):
-        return "INTENT"
+        return "INTENT", 0.8
     if any(k in text for k in ["spam", "offer", "free"]):
-        return "PROMOTION"
+        return "PROMOTION", 0.75
 
-    return "OTHER"
+    return "SOCIAL",0.4
