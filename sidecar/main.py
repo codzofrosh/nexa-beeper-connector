@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from sidecar.models import MessageEvent
 from sidecar.worker import worker
-
+from sidecar.metrics import Metrics
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("sidecar")
 
@@ -47,3 +47,7 @@ async def ingest(event: MessageEvent):
         raise HTTPException(status_code=429, detail="AI sidecar overloaded")
 
     return {"ok": True}
+
+@app.get("/metrics")
+async def metrics():
+    return Metrics.snapshot(queue.qsize())
