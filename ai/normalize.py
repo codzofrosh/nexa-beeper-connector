@@ -1,9 +1,11 @@
-def normalize_message(event, room):
+def normalize_message(event):
     return {
-        "room_id": room.room_id,
-        "room_name": room.display_name,
+        "platform": event.platform,
+        "room_id": event.room_id,
         "sender": event.sender,
-        "text": event.body,
-        "timestamp": event.server_timestamp,
-        "source": "whatsapp"
+        "sender_name": event.sender_name,
+        "is_group": event.is_group,
+        "timestamp": event.timestamp,
+        "text": (event.text or "").strip().lower(),
+        "message_id": event.message_id,
     }
