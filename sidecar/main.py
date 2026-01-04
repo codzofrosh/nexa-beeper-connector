@@ -1,12 +1,14 @@
 # sidecar/main.py
 import asyncio
 import logging
-from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Query
 from sidecar.models import MessageEvent
 from sidecar.worker import worker
 from sidecar.metrics import Metrics
+from sidecar.actions import get_actions_since
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("sidecar")
 
@@ -51,3 +53,15 @@ async def ingest(event: MessageEvent):
 @app.get("/metrics")
 async def metrics():
     return Metrics.snapshot(queue.qsize())
+
+# @app.get("/actions")
+# async def get_actions(limit: int = 100):
+#     return fetch(limit)
+
+@app.get("/actions")
+async def list_actions(
+    since: int = Query(0, description="Unix timestamp cursor"),
+    limit: int = Query(100, le=500),
+):
+    actions = get_actions_since(since, limit)
+    return [a.dict() for a in actions]

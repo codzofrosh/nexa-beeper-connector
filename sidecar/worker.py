@@ -1,10 +1,14 @@
 # sidecar/worker.py
 import asyncio
 import logging
+import time
 
 from sidecar.dedup import Deduplicator
 from sidecar.metrics import Metrics
 from ai.pipeline import run_pipeline
+from sidecar.actions import add_action
+from sidecar.models import ActionResult,ActionEvent
+
 
 log = logging.getLogger("sidecar.worker")
 
@@ -35,6 +39,17 @@ async def worker(queue: asyncio.Queue):
             label = result.get("label")
             action = result.get("action")
 
+            action_result = ActionResult(
+                message_id=event.message_id,
+                platform=event.platform,
+                room_id=event.room_id,
+                label=label,
+                action=action,
+                confidence=result.get("confidence", 1.0),
+                timestamp=int(time.time())
+            )
+
+            # publish(action_result)
             Metrics.processed += 1
 
             log.info(
@@ -52,6 +67,25 @@ async def worker(queue: asyncio.Queue):
                     "label": label,
                     "action": action,
                 },
+            )
+
+            action = ActionEvent(
+                message_id=event.message_id,
+                platform=event.platform,
+                room_id=event.room_id,
+                label=result["label"],
+                action=result["action"],
+                confidence=result.get("confidence", 1.0),
+                timestamp=int(time.time()),
+            )
+
+            add_action(action)
+
+            log.info(
+                "[AI] %s:%s :: %s",
+                action.label,
+                action.action,
+                event.text[:80],
             )
 
         except Exception:
