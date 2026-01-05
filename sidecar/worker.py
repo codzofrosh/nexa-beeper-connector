@@ -6,8 +6,8 @@ import time
 from sidecar.dedup import Deduplicator
 from sidecar.metrics import Metrics
 from ai.pipeline import run_pipeline
-from sidecar.actions import add_action
-from sidecar.models import ActionResult,ActionEvent
+from sidecar.actions import publish
+from sidecar.models import ActionResult
 
 
 log = logging.getLogger("sidecar.worker")
@@ -49,44 +49,17 @@ async def worker(queue: asyncio.Queue):
                 timestamp=int(time.time())
             )
 
-            # publish(action_result)
-            Metrics.processed += 1
+            inserted = publish(action_result)
 
-            log.info(
-                "[AI] %s:%s :: %s",
-                label,
-                action,
-                event.text[:80],
-            )
-
-            log.info(
-                "processed message",
-                extra={
-                    "message_id": event.message_id,
-                    "platform": event.platform,
-                    "label": label,
-                    "action": action,
-                },
-            )
-
-            action = ActionEvent(
-                message_id=event.message_id,
-                platform=event.platform,
-                room_id=event.room_id,
-                label=result["label"],
-                action=result["action"],
-                confidence=result.get("confidence", 1.0),
-                timestamp=int(time.time()),
-            )
-
-            add_action(action)
-
-            log.info(
-                "[AI] %s:%s :: %s",
-                action.label,
-                action.action,
-                event.text[:80],
-            )
+            if inserted:
+                Metrics.processed += 1
+                log.info("[AI] %s:%s :: %s",
+                    action_result.label,
+                    action_result.action,
+                    event.text[:80],
+                )
+            else:
+                log.info("duplicate action ignored: %s", action_result.message_id)
 
         except Exception:
             Metrics.dropped += 1
