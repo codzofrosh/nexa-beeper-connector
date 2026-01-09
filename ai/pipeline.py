@@ -12,10 +12,22 @@
 #     return "GENERAL"
 
 
+"""AI pipeline that composes classifier + policy.
+
+`run_pipeline` is intentionally small: it takes a raw text string, runs a
+classifier to obtain a label and confidence, and then a policy to decide
+an action (NOTIFY, ESCALATE, IGNORE, ...).
+"""
+
 from ai.classifier import classify
 from ai.policy import decide
 
+
 def run_pipeline(text: str):
+    """Run classification and policy to produce an action dict.
+
+    Returns a dict with keys: label, confidence, action.
+    """
     label, confidence = classify(text)
     action = decide(label, confidence)
 

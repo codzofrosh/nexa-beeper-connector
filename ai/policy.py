@@ -10,6 +10,12 @@
 
 #     return "IGNORE"
 
+"""Decision policy that maps classification to actions.
+
+This module implements the simple rules that convert a `(label, confidence)`
+into a resulting action string used by the rest of the system.
+"""
+
 def decide(label: str, confidence: float) -> str:
     """
     Returns one of:

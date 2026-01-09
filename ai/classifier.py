@@ -24,7 +24,19 @@
 #         "confidence": 0.7 if intent != "other" else 0.3,
 #     }
 
+"""Simple rule-based classifier for demonstration purposes.
+
+`classify` returns a `(label, confidence)` tuple. This module is a
+placeholder intended to be replaced by a more capable ML model or service
+in production deployments.
+"""
+
 def classify(text: str) -> tuple [str, float]:
+    """Return a label and confidence for the given text.
+
+    The classifier is lightweight and intentionally conservative about
+    confidence values for unknown inputs.
+    """
     text = text.lower()
 
     if not text:

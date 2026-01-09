@@ -1,3 +1,10 @@
+"""Persistence helpers for actions stored by the sidecar.
+
+This module provides a small CRUD-style interface to the `actions` table
+used by the sidecar and bridge executor logic. `publish` is used by the
+worker to insert an action if it is new (idempotent insert).
+"""
+
 from typing import List
 from sidecar.db import get_conn, init_db
 from sidecar.models import ActionResult

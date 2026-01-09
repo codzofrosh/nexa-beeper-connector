@@ -1,3 +1,10 @@
+"""Lightweight SQLite helpers for the sidecar.
+
+Contains `get_conn()` and `init_db()` used by modules that persist
+and read actions. The DB uses simple sqlite3 connections and a global
+lock for schema setup.
+"""
+
 import sqlite3
 import threading
 from pathlib import Path

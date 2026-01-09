@@ -1,6 +1,13 @@
-# sidecar/main.py
+"""AI Sidecar HTTP server.
+
+Exposes endpoints to ingest messages into the AI pipeline and to inspect
+persisted actions and metrics. The worker runs asynchronously and an
+executor loop (bridge) is started in a short-lived thread.
+"""
+
 import asyncio
 import logging
+import threading
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
@@ -8,6 +15,10 @@ from sidecar.models import MessageEvent
 from sidecar.worker import worker
 from sidecar.metrics import Metrics
 from sidecar.actions import fetch, fetch_since
+from bridge.cursor.store import init_cursor
+from bridge.executor.loop import execution_loop
+
+init_cursor()
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("sidecar")
@@ -16,6 +27,11 @@ QUEUE_MAX = 1000
 queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
 worker_task: asyncio.Task | None = None
 
+threading.Thread(
+    target=execution_loop,
+    daemon=True,
+    name="ai-executor",
+).start()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,6 +58,10 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/message")
 async def ingest(event: MessageEvent):
+    """Enqueue an inbound `MessageEvent` for AI processing.
+
+    The API returns 429 if the internal queue is full to provide backpressure.
+    """
     try:
         queue.put_nowait(event)
     except asyncio.QueueFull:
@@ -52,6 +72,10 @@ async def ingest(event: MessageEvent):
 
 @app.get("/metrics")
 async def metrics():
+    """Return a JSON snapshot of runtime metrics for the sidecar.
+
+    Useful for local debugging and automated health checks.
+    """
     return Metrics.snapshot(queue.qsize())
 
 # @app.get("/actions")
@@ -73,3 +97,5 @@ def get_actions(since: int | None = None, limit: int = 100):
     if since is None:
         return fetch(limit)
     return fetch_since(since, limit)
+
+

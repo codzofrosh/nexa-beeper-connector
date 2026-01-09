@@ -1,18 +1,69 @@
-# sidecar/worker.py
+"""AI worker: consume messages from the queue and emit actions.
+
+This worker loops on an asyncio.Queue populated by the HTTP API and
+runs the AI pipeline. Results are persisted and published (idempotent
+insert) so the executor can later claim and execute actions.
+"""
+
 import asyncio
 import logging
 import time
+import sqlite3
 
 from sidecar.dedup import Deduplicator
 from sidecar.metrics import Metrics
 from ai.pipeline import run_pipeline
 from sidecar.actions import publish
 from sidecar.models import ActionResult
+from sidecar.db import get_conn
 
 
 log = logging.getLogger("sidecar.worker")
 
 dedup = Deduplicator()
+
+
+def persist_action(db, action: ActionResult):
+    """Persist an incoming action as PENDING (best-effort across schemas).
+
+    Attempts to insert with a 'state'/'created_at' schema first and falls
+    back to the existing timestamp-only schema if necessary so this works
+    on existing databases without migrations.
+    """
+    try:
+        db.execute("""
+            INSERT OR IGNORE INTO actions (
+                message_id, platform, room_id,
+                label, action, confidence,
+                state, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
+        """, (
+            action.message_id,
+            action.platform,
+            action.room_id,
+            action.label,
+            action.action,
+            action.confidence,
+            action.timestamp,
+        ))
+        db.commit()
+    except sqlite3.OperationalError:
+        # Fallback for older schema (no state/created_at columns)
+        db.execute("""
+            INSERT OR IGNORE INTO actions (
+                message_id, platform, room_id,
+                label, action, confidence, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            action.message_id,
+            action.platform,
+            action.room_id,
+            action.label,
+            action.action,
+            action.confidence,
+            action.timestamp,
+        ))
+        db.commit()
 
 
 async def worker(queue: asyncio.Queue):
@@ -48,6 +99,14 @@ async def worker(queue: asyncio.Queue):
                 confidence=result.get("confidence", 1.0),
                 timestamp=int(time.time())
             )
+
+            # Persist as PENDING (best-effort). This replaces earlier
+            # in-memory list behavior so actions survive restarts.
+            conn = get_conn()
+            try:
+                persist_action(conn, action_result)
+            finally:
+                conn.close()
 
             inserted = publish(action_result)
 

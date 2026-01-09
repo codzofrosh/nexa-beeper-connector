@@ -1,3 +1,10 @@
+"""Nexa Beeper Connector — Matrix ingestion entrypoint.
+
+This module bootstraps an Async Matrix client, performs an initial sync,
+and registers a callback to forward room messages into the ingestion
+pipeline (see `ingestion.py`). Run directly to start the Matrix listener.
+"""
+
 import asyncio
 from nio import AsyncClient, RoomMessageText
 
