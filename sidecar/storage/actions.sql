@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS actions (
     -- executor metadata
     executor_id TEXT,
 
+    -- external id (optional)
+    external_id TEXT,
+
     -- hard guarantee
     UNIQUE(message_id, action)
 );

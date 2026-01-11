@@ -17,7 +17,9 @@ from sidecar.metrics import Metrics
 from sidecar.actions import fetch, fetch_since
 from bridge.cursor.store import init_cursor
 from bridge.executor.loop import execution_loop
+from bridge.db.database import init_db
 
+init_db()
 init_cursor()
 
 logging.basicConfig(level=logging.INFO)

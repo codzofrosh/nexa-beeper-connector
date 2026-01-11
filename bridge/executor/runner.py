@@ -7,8 +7,8 @@ while True:
         sleep(1)
         continue
 
-    try:
-        execute_action(action)
-        mark_done(db, action["id"], now=time.time())
-    except Exception:
-        mark_failed(db, action["id"])
+    result = execute_action(db, action)
+    if result == "DONE" or result == "SKIPPED":
+        mark_done(db, action["id"], now)
+    else:
+        mark_failed(db, action["id"], now)
