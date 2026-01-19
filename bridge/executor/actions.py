@@ -8,6 +8,7 @@ side-effects in a single place.
 
 import logging
 from time import sleep, time
+from bridge.adapters.whatsapp import send_whatsapp
 
 log = logging.getLogger("bridge.executor.actions")
 
@@ -71,12 +72,13 @@ def execute_action(db, action):
     return "FAILED"
 
 
-def _handle_notify(action):
-    log.info(
-        "🔔 NOTIFY | room=%s msg=%s",
-        action["room_id"],
-        action["message_id"],
+def _handle_notify(action: dict, external_id: str):
+    send_whatsapp(
+        room=action["room_id"],
+        text="Auto reply",
+        idempotency_key=external_id,
     )
+
     # TODO: call Matrix API / WhatsApp bridge
 
 
@@ -95,21 +97,29 @@ def _handle_suppress(action):
         action["message_id"],
     )
     # intentionally do nothing
-def execute_action(db, action):
+def execute_action(action: dict, external_id: str):
+    """
+    Perform the side-effect exactly once.
+    No DB access. No state transitions.
+    """
 
-    if already_executed(db, action["external_id"]):
-        log.info("Skipping already executed action %s", action["external_id"])
-        return "SKIPPED"
-    perform_side_effect(action)
-    return "DONE"
+    act = action["action"]
 
-def _handle_notify(action):
-    log.info(
-        "🔔 NOTIFY | room=%s msg=%s",
-        action["room_id"],
-        action["message_id"],
-    )
-    # TODO: call Matrix API / WhatsApp bridge
+    if act == "NOTIFY":
+        send_whatsapp(
+            room=action["room_id"],
+            text="auto-reply",
+            idempotency_key=external_id,
+        )
+
+    elif act == "ESCALATE":
+        raise NotImplementedError("ESCALATE not wired yet")
+
+    elif act == "SUPPRESS":
+        pass  # intentionally do nothing
+
+    else:
+        raise ValueError(f"Unknown action: {act}")
 
 
 def _handle_escalate(action):
@@ -127,4 +137,3 @@ def _handle_suppress(action):
         action["message_id"],
     )
     # intentionally do nothing
-

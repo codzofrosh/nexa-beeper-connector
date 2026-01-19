@@ -1,6 +1,7 @@
 # sidecar/actions_store.py
 import logging
 import time
+import sqlite3
 from bridge.db.database import get_db
 
 log = logging.getLogger("sidecar.actions.store")
@@ -22,10 +23,16 @@ def persist_action(action: dict):
         with db:
             db.execute("""
                 INSERT INTO actions (
-                    message_id, platform, room_id,
-                    label, action, confidence,
-                    state, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
+                    message_id,
+                    platform,
+                    room_id,
+                    label,
+                    action,
+                    confidence,
+                    state,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
             """, (
                 action["message_id"],
                 action["platform"],
@@ -33,11 +40,17 @@ def persist_action(action: dict):
                 action["label"],
                 action["action"],
                 action["confidence"],
-                now
+                now,
             ))
-    except Exception as e:
-        # UNIQUE(message_id, action) violation lands here
+        return True
+
+    except sqlite3.IntegrityError:
         log.info(
-            "duplicate action ignored: %s",
-            action["message_id"]
+            "Duplicate action ignored by DB",
+            extra={
+                "message_id": action["message_id"],
+                "action": action["action"],
+                "platform": action["platform"],
+            }
         )
+        return False

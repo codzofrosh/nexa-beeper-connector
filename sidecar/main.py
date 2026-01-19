@@ -16,10 +16,14 @@ from sidecar.worker import worker
 from sidecar.metrics import Metrics
 from sidecar.actions import fetch, fetch_since
 from bridge.cursor.store import init_cursor
-from bridge.executor.loop import execution_loop
+from bridge.executor.loop import executor_loop
 from bridge.db.database import init_db
+from bridge.db.database import get_db
+from sidecar.migrations import migrate
 
 init_db()
+db = get_db()
+migrate(db)
 init_cursor()
 
 logging.basicConfig(level=logging.INFO)
@@ -29,17 +33,21 @@ QUEUE_MAX = 1000
 queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
 worker_task: asyncio.Task | None = None
 
-threading.Thread(
-    target=execution_loop,
-    daemon=True,
-    name="ai-executor",
-).start()
+# threading.Thread(
+#     target=execution_loop,
+#     daemon=True,
+#     name="ai-executor",
+# ).start()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global worker_task
     log.info("🚀 AI Sidecar starting")
-
+    threading.Thread(
+    target=executor_loop,
+    daemon=True,
+    name="ai-executor",
+    ).start()
     worker_task = asyncio.create_task(worker(queue))
 
     try:

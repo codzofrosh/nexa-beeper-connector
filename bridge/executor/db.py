@@ -17,7 +17,7 @@ def claim_next_action(db, now: int) -> Optional[dict]:
     with db:
         row = db.execute("""
             SELECT id FROM actions
-            WHERE state = 'PENDING'
+            WHERE state IN ('PENDING', 'EXECUTING') AND external_id IS NULL
             ORDER BY created_at
             LIMIT 1
         """).fetchone()
@@ -79,3 +79,15 @@ def mark_failed(db, action_id: int, now: int = None):
           AND state = 'EXECUTING'
     """, (now, action_id))
     db.commit()
+def set_external_id(db, action_id: int, external_id: str, now: int) -> bool:
+    cur = db.execute("""
+        UPDATE actions
+        SET external_id = ?,
+            state = 'EXECUTING',
+            claimed_at = ?
+        WHERE id = ?
+          AND external_id IS NULL
+    """, (external_id, now, action_id))
+
+    db.commit()
+    return cur.rowcount == 1

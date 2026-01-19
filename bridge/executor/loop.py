@@ -1,46 +1,44 @@
-"""Executor loop that polls the sidecar for EXECUTING actions.
-
-The loop periodically fetches actions from the sidecar `/actions` API
-and invokes `execute_action` on any action in the `EXECUTING` state.
-"""
-
 import time
-import requests
 import logging
-
-from bridge.cursor.store import load_cursor, advance_cursor
+from bridge.db.database import get_db
+from bridge.executor.db import (
+    claim_next_action,
+    mark_done,
+    mark_failed,
+    recover_stuck_actions,
+)
+from bridge.executor.idempotency import make_external_id
 from bridge.executor.actions import execute_action
+from bridge.executor.db import set_external_id
 
-log = logging.getLogger("bridge.executor")
+log = logging.getLogger("bridge.executor.loop")
 
-SIDECAR_URL = "http://localhost:8080"
+EXECUTOR_ID = "executor-1"  # later make this env-based
 
-
-def execution_loop():
-    """Continuously poll sidecar for actions and execute them."""
+def executor_loop():
+    db = get_db()
     log.info("🚀 Bridge execution loop started")
 
     while True:
+        now = int(time.time())
+
+        recover_stuck_actions(db, now)
+
+        action = claim_next_action(db, now)
+        if not action:
+            time.sleep(1)
+            continue
+
         try:
-            cursor = load_cursor()
+            external_id = action["external_id"]
+            if not external_id:
+                external_id = make_external_id(action)
+                set_external_id(db, action["id"], external_id, now)
 
-            resp = requests.get(
-                f"{SIDECAR_URL}/actions",
-                params={"since": cursor},
-                timeout=5,
-            )
-            resp.raise_for_status()
-
-            actions = resp.json()
-            for action in actions:
-                if action.get("state") != "EXECUTING":
-                    log.warning("Skipping non-executing action: %s", action.get("id"))
-                    continue
-
-                execute_action(action)   # ← YOUR domain logic
-                advance_cursor(action["timestamp"])
+            execute_action(action, external_id)
+            mark_done(db, action["id"], now)
 
         except Exception:
-            log.exception("💥 Execution loop failure")
+            log.exception("💥 execution failed", extra={"action_id": action["id"]})
+            mark_failed(db, action["id"], now)
 
-        time.sleep(2)

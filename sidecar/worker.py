@@ -81,16 +81,21 @@ async def worker(queue: asyncio.Queue):
 
             result = run_pipeline(event.text)
 
-            persist_action({
+            inserted = persist_action({
                 "message_id": event.message_id,
                 "platform": event.platform,
                 "room_id": event.room_id,
                 "label": result["label"],
                 "action": result["action"],
                 "confidence": result["confidence"],
-                "external_id": f"{event.platform}:{event.room_id}:{event.message_id}",
             })
-    
+
+            if not inserted:
+                log.info(
+                    "Duplicate action ignored by DB",
+                    extra={"message_id": event.message_id},
+                )
+
         except Exception:
             Metrics.dropped += 1
             log.exception(

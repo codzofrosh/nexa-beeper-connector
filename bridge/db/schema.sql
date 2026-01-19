@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS actions (
     created_at INTEGER NOT NULL,
 
     -- HARD GUARANTEE: AI can never create two actions for same message
-    UNIQUE(message_id, action)
+    UNIQUE(message_id, platform)
 );
 
 CREATE INDEX IF NOT EXISTS idx_actions_state_created
