@@ -32,35 +32,14 @@ def executor_loop():
             continue
 
         try:
-            # Step 3: idempotency guard
-            if action["external_id"]:
-                log.info(
-                    "Action already executed, marking done",
-                    extra={"action_id": action["id"]},
-                )
-                mark_done(db, action["id"], now)
-                continue
+            external_id = action["external_id"] or make_external_id(action)
 
-            # Step 4: generate deterministic idempotency key
-            external_id = make_external_id(action)
+            if not action["external_id"]:
+                set_external_id(db, action["id"], external_id, now)
 
-            # Step 5: persist idempotency key BEFORE side effect
-            set_external_id(
-                db,
-                action_id=action["id"],
-                external_id=external_id,
-                now=now,
-            )
-
-            # Step 6: perform side-effect
             execute_action(action, external_id)
-
-            # Step 7: mark success
             mark_done(db, action["id"], now)
 
         except Exception as e:
-            log.exception(
-                "💥 execution failed",
-                extra={"action_id": action["id"]},
-            )
-            mark_failed(db, action["id"], now)
+            log.exception("Execution failed", extra={"action_id": action["id"]})
+            mark_failed(db, action["id"], str(e), now)

@@ -7,47 +7,54 @@ executors can run concurrently and avoid races.
 from typing import Optional
 import time
 from bridge.executor.identity import EXECUTOR_ID
+from bridge.executor.retry import MAX_ATTEMPTS, backoff_seconds
+from sidecar import db
 
+def fetch_candidate(db):
+    return db.execute("""
+        SELECT *
+        FROM actions
+        WHERE state IN ('PENDING', 'FAILED')
+        ORDER BY created_at
+        LIMIT 1
+    """).fetchone()
 
-def claim_next_action(db, now: int, max_attempts: int = 5):
-    """
-    Atomically claim the next retryable action.
-    """
-    with db:
-        row = db.execute("""
-            SELECT id
-            FROM actions
-            WHERE state = 'PENDING'
-              AND attempts < ?
-            ORDER BY created_at
-            LIMIT 1
-        """, (max_attempts,)).fetchone()
+def claim_next_action(db, now: int):
+    row = fetch_candidate(db)
+    if not row:
+        return None
 
-        if not row:
-            return None
+    # 🔒 BACKOFF ENFORCEMENT (THIS IS THE KEY)
+    if row["state"] == "FAILED":
+        delay = backoff_seconds(row)
+        last = row["executed_at"] or row["created_at"]
 
-        updated = db.execute("""
-            UPDATE actions
-            SET state = 'EXECUTING',
-                attempts = attempts + 1,
-                claimed_at = ?,
-                executor_id = ?
-            WHERE id = ?
-              AND state = 'PENDING'
-        """, (
-            now,
-            EXECUTOR_ID,
-            row["id"],
-        ))
+        if now - last < delay:
+            return None  # ⛔ too early, skip quietly
 
-        if updated.rowcount != 1:
-            return None  # lost race safely
+    # attempt atomic claim
+    updated = db.execute("""
+        UPDATE actions
+        SET
+            state = 'EXECUTING',
+            claimed_at = ?,
+            executor_id = ?
+        WHERE id = ?
+          AND state = ?
+    """, (
+        now,
+        EXECUTOR_ID,
+        row["id"],
+        row["state"],
+    ))
 
-        return db.execute(
-            "SELECT * FROM actions WHERE id = ?",
-            (row["id"],)
-        ).fetchone()
+    if updated.rowcount != 1:
+        return None  # lost race safely
 
+    return db.execute(
+        "SELECT * FROM actions WHERE id = ?",
+        (row["id"],)
+    ).fetchone()
 
 
 def mark_done(db, action_id: int, now: int):
@@ -63,41 +70,31 @@ def mark_done(db, action_id: int, now: int):
 
 
 def recover_stuck_actions(db, now: int, timeout: int = 60, max_attempts: int = 5):
+   db.execute("""
+        UPDATE actions
+        SET
+            state = 'FAILED',
+            executor_id = NULL,
+            claimed_at = NULL
+        WHERE state = 'EXECUTING'
+          AND claimed_at < ?
+    """, (now - timeout,))
+   db.commit()
+
+def mark_failed(db, action_id: int, error: str, now: int):
     db.execute("""
         UPDATE actions
-        SET state = 'PENDING',
-            claimed_at = NULL,
-            executor_id = NULL
-        WHERE (
-            state = 'EXECUTING'
-            AND claimed_at < ?
-        )
-        OR (
-            state = 'FAILED'
-            AND attempts < ?
-        )
-    """, (
-        now - timeout,
-        max_attempts,
-    ))
-    db.commit()
-
-def mark_failed(db, action_id: int, error: str, now: int | None = None):
-    if now is None:
-        now = int(time.time())
-
-    db.execute("""
-        UPDATE actions
-        SET state = 'FAILED',
+        SET
+            state = CASE
+                WHEN attempts + 1 >= ? THEN 'DEAD'
+                ELSE 'FAILED'
+            END,
+            attempts = attempts + 1,
             last_error = ?,
             executed_at = ?
         WHERE id = ?
           AND state = 'EXECUTING'
-    """, (
-        error[:500],  # cap size defensively
-        now,
-        action_id,
-    ))
+    """, (MAX_ATTEMPTS, error, now, action_id))
     db.commit()
 
 def set_external_id(db, action_id: int, external_id: str, now: int) -> bool:
