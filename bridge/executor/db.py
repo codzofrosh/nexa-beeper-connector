@@ -9,18 +9,19 @@ import time
 from bridge.executor.identity import EXECUTOR_ID
 
 
-def claim_next_action(db, now: int) -> Optional[dict]:
-    """Attempt to atomically claim the next pending action.
-
-    Returns the claimed action row or None if none available or claim lost.
+def claim_next_action(db, now: int, max_attempts: int = 5):
+    """
+    Atomically claim the next retryable action.
     """
     with db:
         row = db.execute("""
-            SELECT id FROM actions
-            WHERE state IN ('PENDING', 'EXECUTING') AND external_id IS NULL
+            SELECT id
+            FROM actions
+            WHERE state = 'PENDING'
+              AND attempts < ?
             ORDER BY created_at
             LIMIT 1
-        """).fetchone()
+        """, (max_attempts,)).fetchone()
 
         if not row:
             return None
@@ -28,18 +29,25 @@ def claim_next_action(db, now: int) -> Optional[dict]:
         updated = db.execute("""
             UPDATE actions
             SET state = 'EXECUTING',
+                attempts = attempts + 1,
                 claimed_at = ?,
                 executor_id = ?
             WHERE id = ?
               AND state = 'PENDING'
-        """, (now, EXECUTOR_ID, row["id"]))
+        """, (
+            now,
+            EXECUTOR_ID,
+            row["id"],
+        ))
 
         if updated.rowcount != 1:
             return None  # lost race safely
 
         return db.execute(
-            "SELECT * FROM actions WHERE id = ?", (row["id"],)
+            "SELECT * FROM actions WHERE id = ?",
+            (row["id"],)
         ).fetchone()
+
 
 
 def mark_done(db, action_id: int, now: int):
@@ -54,31 +62,44 @@ def mark_done(db, action_id: int, now: int):
     db.commit()
 
 
-def recover_stuck_actions(db, now: int, timeout: int = 60):
-    """Reset long-running executing actions back to PENDING for retry."""
+def recover_stuck_actions(db, now: int, timeout: int = 60, max_attempts: int = 5):
     db.execute("""
         UPDATE actions
         SET state = 'PENDING',
             claimed_at = NULL,
             executor_id = NULL
-        WHERE state = 'EXECUTING'
-          AND claimed_at < ?
-    """, (now - timeout,))
+        WHERE (
+            state = 'EXECUTING'
+            AND claimed_at < ?
+        )
+        OR (
+            state = 'FAILED'
+            AND attempts < ?
+        )
+    """, (
+        now - timeout,
+        max_attempts,
+    ))
     db.commit()
 
-
-def mark_failed(db, action_id: int, now: int = None):
-    """Mark an executing action as failed."""
+def mark_failed(db, action_id: int, error: str, now: int | None = None):
     if now is None:
         now = int(time.time())
+
     db.execute("""
         UPDATE actions
         SET state = 'FAILED',
+            last_error = ?,
             executed_at = ?
         WHERE id = ?
           AND state = 'EXECUTING'
-    """, (now, action_id))
+    """, (
+        error[:500],  # cap size defensively
+        now,
+        action_id,
+    ))
     db.commit()
+
 def set_external_id(db, action_id: int, external_id: str, now: int) -> bool:
     cur = db.execute("""
         UPDATE actions

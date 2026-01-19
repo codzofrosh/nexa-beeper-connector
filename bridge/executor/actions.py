@@ -56,20 +56,20 @@ def perform_side_effect(db, action: dict) -> str:
     return external_id
 
 
-def execute_action(db, action):
-    """Execute an action if it hasn't been executed already.
+# def execute_action(db, action):
+#     """Execute an action if it hasn't been executed already.
 
-    Returns a status string: 'DONE' on success, 'SKIPPED' if already executed.
-    """
-    if already_executed(db, action.get("external_id")):
-        log.info("Skipping already executed action %s", action.get("external_id"))
-        return "SKIPPED"
+#     Returns a status string: 'DONE' on success, 'SKIPPED' if already executed.
+#     """
+#     if already_executed(db, action.get("external_id")):
+#         log.info("Skipping already executed action %s", action.get("external_id"))
+#         return "SKIPPED"
 
-    external_id = perform_side_effect(db, action)
-    if external_id:
-        # mark executed_at will be set by runner via mark_done; we just return DONE
-        return "DONE"
-    return "FAILED"
+#     external_id = perform_side_effect(db, action)
+#     if external_id:
+#         # mark executed_at will be set by runner via mark_done; we just return DONE
+#         return "DONE"
+#     return "FAILED"
 
 
 def _handle_notify(action: dict, external_id: str):
@@ -97,13 +97,20 @@ def _handle_suppress(action):
         action["message_id"],
     )
     # intentionally do nothing
+
 def execute_action(action: dict, external_id: str):
     """
     Perform the side-effect exactly once.
-    No DB access. No state transitions.
+    No DB. No retries. No state.
     """
 
     act = action["action"]
+    log.info(
+    "Executing action %s | room=%s | key=%s",
+    act,
+    action["room_id"],
+    external_id,
+    )
 
     if act == "NOTIFY":
         send_whatsapp(
@@ -111,15 +118,18 @@ def execute_action(action: dict, external_id: str):
             text="auto-reply",
             idempotency_key=external_id,
         )
-
     elif act == "ESCALATE":
         raise NotImplementedError("ESCALATE not wired yet")
 
     elif act == "SUPPRESS":
-        pass  # intentionally do nothing
+        return
+
+    elif act == "IGNORE":
+        return
 
     else:
         raise ValueError(f"Unknown action: {act}")
+
 
 
 def _handle_escalate(action):
