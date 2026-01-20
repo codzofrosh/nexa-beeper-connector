@@ -8,6 +8,7 @@ executor loop (bridge) is started in a short-lived thread.
 import asyncio
 import logging
 import threading
+import os
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
@@ -41,13 +42,16 @@ worker_task: asyncio.Task | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker_task
-    log.info("🚀 AI Sidecar starting")
-    threading.Thread(
-    target=executor_loop,
-    daemon=True,
-    name="ai-executor",
-    ).start()
+    if os.getenv("ENABLE_EXECUTOR") == "1":
+        log.info("⚙️ Executor ENABLED")
+        threading.Thread(
+            target=executor_loop,
+            daemon=True,
+            name="ai-executor",
+        ).start()
+    else:
+        log.info("🛑 Executor DISABLED (decision-only mode)")
+
     worker_task = asyncio.create_task(worker(queue))
 
     try:
@@ -63,10 +67,16 @@ async def lifespan(app: FastAPI):
                 log.info("🧠 AI worker stopped cleanly")
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="Nexa AI Sidecar",
+    version="1.0.0",
+    openapi_url="/v1/openapi.json",
+    docs_url="/v1/docs",
+    redoc_url="/v1/redoc",
+    lifespan=lifespan,
+)
 
-
-@app.post("/message")
+@app.post("/v1/message")
 async def ingest(event: MessageEvent):
     """Enqueue an inbound `MessageEvent` for AI processing.
 
@@ -80,7 +90,7 @@ async def ingest(event: MessageEvent):
 
     return {"ok": True}
 
-@app.get("/metrics")
+@app.get("/v1/metrics")
 async def metrics():
     """Return a JSON snapshot of runtime metrics for the sidecar.
 
@@ -102,7 +112,7 @@ async def metrics():
 
 
 
-@app.get("/actions")
+@app.get("/v1/actions")
 def get_actions(since: int | None = None, limit: int = 100):
     if since is None:
         return fetch(limit)
