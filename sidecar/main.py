@@ -8,6 +8,7 @@ executor loop (bridge) is started in a short-lived thread.
 import asyncio
 import logging
 import threading
+import os
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
@@ -41,13 +42,16 @@ worker_task: asyncio.Task | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global worker_task
-    log.info("🚀 AI Sidecar starting")
-    threading.Thread(
-    target=executor_loop,
-    daemon=True,
-    name="ai-executor",
-    ).start()
+    if os.getenv("ENABLE_EXECUTOR") == "1":
+        log.info("⚙️ Executor ENABLED")
+        threading.Thread(
+            target=executor_loop,
+            daemon=True,
+            name="ai-executor",
+        ).start()
+    else:
+        log.info("🛑 Executor DISABLED (decision-only mode)")
+
     worker_task = asyncio.create_task(worker(queue))
 
     try:
