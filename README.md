@@ -33,3 +33,7 @@ Contributing
 ------------
 - Add or update unit/integration tests when changing behavior around persistence, duplicate detection, and execution semantics.
 - If you modify the DB schema, add a migration and tests to the `tests/` directory.
+
+Commands to run
+------------
+- Run App: uvicorn sidecar.main:app --host 0.0.0.0 --port 8080 --log-level info
