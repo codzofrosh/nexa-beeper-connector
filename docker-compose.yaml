@@ -25,6 +25,21 @@ services:
       --host 0.0.0.0
       --port 8080
       --workers 1
-
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: nexa-whatsapp-bridge
+    volumes:
+      - ./bridge/whatsapp/config.yaml:/data/config.yaml
+      - ./data/whatsapp:/data
+    networks:
+      - nexa-network
+    depends_on:
+      - nexa-sidecar  # Your existing service
+    restart: unless-stopped
+    environment:
+      - WEBHOOK_URL=http://nexa-sidecar:8000/api/messages/incoming
 volumes:
   nexa_data:
+networks:
+  nexa-network:  
+    driver: bridge
