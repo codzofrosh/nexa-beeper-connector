@@ -1,208 +1,141 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Interactive demo script to test message classification in real-time
-Users can input messages and see priority classification and actions immediately
+Simple Interactive Demo - Type messages and see classification results
 """
 
 import requests
-import json
 import time
-from datetime import datetime
+import json
+import random
+import hashlib
+import sqlite3
 
 API_URL = "http://localhost:8000"
+message_counter = 0
+sent_messages = set()  # Track sent messages for duplicate detection
 
-def print_header():
-    """Print welcome header"""
-    print("\n" + "="*70)
-    print("NEXA BEEPER CONNECTOR - INTERACTIVE MESSAGE CLASSIFIER")
-    print("="*70)
-    print("Type your message and press Enter to classify it")
-    print("Commands: 'status', 'stats', 'quit' or 'exit'")
-    print("="*70 + "\n")
-
-def check_api_health():
-    """Check if API is running"""
+def get_db_status():
+    """Get current database status"""
     try:
-        response = requests.get(f"{API_URL}/health", timeout=2)
-        if response.status_code == 200:
-            print("[INFO] API is running and healthy")
-            return True
-    except Exception as e:
-        print(f"[ERROR] Cannot connect to API: {e}")
-        print(f"[INFO] Make sure sidecar is running: python sidecar/main.py")
-        return False
+        conn = sqlite3.connect('data/nexa.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        total_msgs = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE classification IS NOT NULL")
+        classified = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM actions WHERE status = 'PENDING'")
+        pending = cursor.fetchone()[0]
+        conn.close()
+        return {"total": total_msgs, "classified": classified, "pending": pending}
+    except:
+        return None
 
-def get_user_status():
-    """Get current user status"""
+def classify_message(message_text):
+    """Send message to API and show results"""
+    global message_counter
+    message_counter += 1
+    
+    # Check for local duplicate
+    msg_hash = hashlib.md5(message_text.encode()).hexdigest()
+    is_duplicate = msg_hash in sent_messages
+    sent_messages.add(msg_hash)
+    
     try:
-        response = requests.get(f"{API_URL}/api/user/status?user_id=default_user")
-        data = response.json()
-        return data.get('status', 'unknown')
-    except Exception as e:
-        print(f"[ERROR] Failed to get user status: {e}")
-        return "unknown"
-
-def set_user_status(status):
-    """Set user status"""
-    try:
-        response = requests.post(
-            f"{API_URL}/api/user/status",
-            json={
-                "user_id": "default_user",
-                "status": status,
-                "auto_reply_message": f"Currently {status}. Will respond soon!"
-            }
-        )
-        if response.status_code == 200:
-            print(f"[OK] User status changed to: {status}")
-            return True
-    except Exception as e:
-        print(f"[ERROR] Failed to set status: {e}")
-    return False
-
-def show_stats():
-    """Display system statistics"""
-    try:
-        response = requests.get(f"{API_URL}/api/stats")
-        stats = response.json()
-        
-        print("\n" + "-"*70)
-        print("SYSTEM STATISTICS")
-        print("-"*70)
-        print(f"Total Messages: {stats.get('total_messages', 0)}")
-        print(f"Pending Actions: {stats.get('pending_actions', 0)}")
-        print(f"Classifier: {stats.get('classifier', 'unknown')}")
-        
-        if stats.get('ollama_enabled'):
-            print(f"Ollama Model: {stats.get('ollama_model', 'N/A')}")
-        
-        priority_breakdown = stats.get('priority_breakdown', {})
-        if priority_breakdown:
-            print("\nPriority Breakdown:")
-            for priority, count in sorted(priority_breakdown.items()):
-                print(f"  {priority.upper()}: {count}")
-        print("-"*70 + "\n")
-        return True
-    except Exception as e:
-        print(f"[ERROR] Failed to get stats: {e}")
-    return False
-
-def classify_message(text):
-    """Send message to classifier and display results"""
-    try:
+        # Use unique ID combining timestamp and random UUID
         message = {
-            "id": f"msg_{int(time.time() * 1000)}",
+            "id": f"msg_{int(time.time() * 1000)}_{random.randint(10000, 99999)}_{message_counter}",
             "platform": "interactive",
-            "sender": "@user:interactive",
-            "content": text,
+            "sender": "@user:example.com",
+            "content": message_text,
             "timestamp": int(time.time()),
-            "metadata": {}
         }
         
         response = requests.post(
             f"{API_URL}/api/messages/classify",
             json=message,
-            timeout=10
+            timeout=30
         )
         
-        if response.status_code != 200:
-            print(f"[ERROR] API returned status {response.status_code}")
-            print(f"[ERROR] Response: {response.text}")
-            return False
-        
-        result = response.json()
-        
-        # Display results
-        print("\n" + "-"*70)
-        print("CLASSIFICATION RESULT")
-        print("-"*70)
-        print(f"Message: {text[:60]}{'...' if len(text) > 60 else ''}")
-        print(f"Priority: {result.get('priority', 'N/A').upper()}")
-        print(f"Action: {result.get('action_type', 'N/A').upper()}")
-        
-        classification = result.get('classification', {})
-        print(f"Category: {classification.get('category', 'N/A').upper()}")
-        print(f"Confidence: {classification.get('confidence', 0):.2%}")
-        print(f"Reasoning: {classification.get('reasoning', 'N/A')}")
-        print(f"Requires Action: {'YES' if classification.get('requires_action') else 'NO'}")
-        print("-"*70 + "\n")
-        
-        return True
-        
-    except requests.exceptions.Timeout:
-        print("[ERROR] Request timed out. The API may be busy or offline.")
-        return False
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Handle both old and new response formats
+            priority = result.get('priority', 'UNKNOWN')
+            action_type = result.get('action_type', 'NONE')
+            status = result.get('status', 'unknown')
+            classification = result.get('classification', {})
+            
+            # Get classification details
+            if isinstance(classification, dict):
+                category = classification.get('category', 'UNKNOWN')
+                confidence = classification.get('confidence', 0)
+                reasoning = classification.get('reasoning', 'N/A')
+                requires_action = classification.get('requires_action', False)
+            else:
+                category = 'UNKNOWN'
+                confidence = 0
+                reasoning = 'N/A'
+                requires_action = False
+            
+            # Display results simply
+            print("--------" * 10)
+            print(f"Message: {message_text}")
+            if is_duplicate:
+                print(f"⚠️  DUPLICATE (sent before in this session)")
+            print(f"Priority: {priority.upper()}")
+            print(f"Action: {action_type.upper()}")
+            print(f"Category: {category.upper()}")
+            print(f"Confidence: {confidence:.2%}")
+            print(f"Reasoning: {reasoning}")
+            print(f"Requires Action: {'YES' if requires_action else 'NO'}")
+            print(f"DB Status: {status.upper()}")
+            print("--------" * 10)
+        else:
+            print(f"Error: API returned {response.status_code}")
+            print(f"Response: {response.text}")
+            
     except Exception as e:
-        print(f"[ERROR] Failed to classify message: {e}")
-        return False
-
-def show_commands():
-    """Show available commands"""
-    print("\nAvailable commands:")
-    print("  'status'     - Show current user status")
-    print("  'available'  - Set status to available")
-    print("  'busy'       - Set status to busy")
-    print("  'dnd'        - Set status to do-not-disturb")
-    print("  'stats'      - Show system statistics")
-    print("  'help'       - Show this help message")
-    print("  'quit/exit'  - Exit the program")
-    print()
+        print(f"Error: {e}")
 
 def main():
-    """Main interactive loop"""
-    print_header()
+    """Main loop"""
+    print("\nNexa Beeper - Message Classification Demo")
+    print("Commands: 'exit' to quit, 'status' for DB info\n")
     
-    # Check if API is available
-    if not check_api_health():
-        print("\n[FATAL] Cannot connect to API. Exiting.")
+    # Check health
+    try:
+        response = requests.get(f"{API_URL}/health", timeout=2)
+        if response.status_code == 200:
+            print("✓ API is running\n")
+    except:
+        print("✗ API not running!\n")
         return
     
-    print(f"[OK] Current user status: {get_user_status()}\n")
-    
-    try:
-        while True:
-            try:
-                user_input = input("> ").strip()
-                
-                if not user_input:
-                    continue
-                
-                # Handle commands
-                if user_input.lower() in ['quit', 'exit']:
-                    print("\nGoodbye!")
-                    break
-                
-                elif user_input.lower() == 'status':
-                    status = get_user_status()
-                    print(f"[INFO] Current status: {status}")
-                
-                elif user_input.lower() == 'available':
-                    set_user_status('available')
-                
-                elif user_input.lower() == 'busy':
-                    set_user_status('busy')
-                
-                elif user_input.lower() == 'dnd':
-                    set_user_status('dnd')
-                
-                elif user_input.lower() == 'stats':
-                    show_stats()
-                
-                elif user_input.lower() in ['help', '?']:
-                    show_commands()
-                
-                else:
-                    # Treat as message to classify
-                    classify_message(user_input)
+    while True:
+        try:
+            message = input("> ").strip()
             
-            except KeyboardInterrupt:
-                print("\n\n[INFO] Interrupted by user")
+            if message.lower() == 'exit':
                 break
-            except Exception as e:
-                print(f"[ERROR] Unexpected error: {e}")
+            
+            if message.lower() == 'status':
+                db_status = get_db_status()
+                if db_status:
+                    print(f"\n📊 Database Status:")
+                    print(f"  Total messages: {db_status['total']}")
+                    print(f"  Classified: {db_status['classified']}")
+                    print(f"  Pending actions: {db_status['pending']}\n")
+                else:
+                    print("Could not read database\n")
+                continue
+            
+            if message:
+                classify_message(message)
+        
+        except KeyboardInterrupt:
+            break
     
-    finally:
-        print("\n[INFO] Interactive session ended")
+    print("Goodbye!")
 
 if __name__ == "__main__":
     main()
