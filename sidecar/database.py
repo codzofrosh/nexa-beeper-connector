@@ -101,6 +101,29 @@ class DatabaseService:
             finally:
                 conn.close()
     
+    def message_exists(self, message_id: str) -> bool:
+        """
+        Check if a message already exists (duplicate check).
+        
+        Args:
+            message_id: Message ID to check
+            
+        Returns:
+            True if message exists, False otherwise
+        """
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT 1 FROM messages WHERE id = ? LIMIT 1", (message_id,))
+                exists = cursor.fetchone() is not None
+                conn.close()
+                return exists
+            except Exception as e:
+                logger.error(f"Failed to check message existence: {e}")
+                conn.close()
+                return False
+    
     def store_message(self, message_id: str, platform: str, sender: str, 
                      content: str, timestamp: int, room_id: Optional[str] = None,
                      classification: Optional[Dict] = None) -> bool:

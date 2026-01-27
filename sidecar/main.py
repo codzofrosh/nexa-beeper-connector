@@ -100,7 +100,7 @@ class UserStatus(BaseModel):
 async def classify_message_endpoint(message: IncomingMessage):
     """
     Unified message processing endpoint.
-    Combines classification, decision-making, and persistence in one call.
+    Idempotent: NEW messages get classification, DUPLICATES get only metadata.
     """
     try:
         result = message_service.process_message(
@@ -115,24 +115,26 @@ async def classify_message_endpoint(message: IncomingMessage):
         if result["status"] == "error":
             raise HTTPException(status_code=500, detail=result.get("error", "Processing failed"))
         
+        # DUPLICATE: Return metadata only, NO classification
         if result["status"] == "duplicate":
             logger.warning(f"Duplicate message: {message.id}")
-            # Still return 200 but indicate it was a duplicate
             return ActionResponse(
                 message_id=message.id,
-                action_type=result.get("action", "none"),
+                action_type="none",
                 priority="unknown",
-                classification={},
-                status="duplicate"
+                classification={},  # Empty - no classification for duplicates
+                status="duplicate",
+                user_status=None
             )
         
+        # SUCCESS: Return full classification and action
         return ActionResponse(
             message_id=result["message_id"],
             action_id=result.get("action_id"),
             action_type=result["action_type"],
             priority=result["priority"],
             classification=result["classification"],
-            status="pending",
+            status="success",
             user_status=result.get("user_status")
         )
         

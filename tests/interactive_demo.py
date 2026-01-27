@@ -41,9 +41,12 @@ def classify_message(message_text):
     sent_messages.add(msg_hash)
     
     try:
-        # Use unique ID combining timestamp and random UUID
+        # Use deterministic ID based on content only
+        # Same message content = same ID = duplicate detection
+        message_id = hashlib.md5(message_text.encode()).hexdigest()[:16]
+        
         message = {
-            "id": f"msg_{int(time.time() * 1000)}_{random.randint(10000, 99999)}_{message_counter}",
+            "id": message_id,
             "platform": "interactive",
             "sender": "@user:example.com",
             "content": message_text,
@@ -58,37 +61,43 @@ def classify_message(message_text):
         
         if response.status_code == 200:
             result = response.json()
-            
-            # Handle both old and new response formats
-            priority = result.get('priority', 'UNKNOWN')
-            action_type = result.get('action_type', 'NONE')
             status = result.get('status', 'unknown')
-            classification = result.get('classification', {})
             
-            # Get classification details
-            if isinstance(classification, dict):
-                category = classification.get('category', 'UNKNOWN')
-                confidence = classification.get('confidence', 0)
-                reasoning = classification.get('reasoning', 'N/A')
-                requires_action = classification.get('requires_action', False)
-            else:
-                category = 'UNKNOWN'
-                confidence = 0
-                reasoning = 'N/A'
-                requires_action = False
-            
-            # Display results simply
+            # Display results
             print("--------" * 10)
             print(f"Message: {message_text}")
-            if is_duplicate:
-                print(f"⚠️  DUPLICATE (sent before in this session)")
-            print(f"Priority: {priority.upper()}")
-            print(f"Action: {action_type.upper()}")
-            print(f"Category: {category.upper()}")
-            print(f"Confidence: {confidence:.2%}")
-            print(f"Reasoning: {reasoning}")
-            print(f"Requires Action: {'YES' if requires_action else 'NO'}")
-            print(f"DB Status: {status.upper()}")
+            print(f"Status: {status.upper()}")
+            
+            # DUPLICATE: Only metadata, no classification
+            if status == "duplicate":
+                print(f"Reason: message_id already exists")
+                print(f"LLM Invoked: NO")
+                print(f"DB Status: STORED (previous)")
+            else:
+                # SUCCESS: Full classification
+                classification = result.get('classification', {})
+                priority = result.get('priority', 'UNKNOWN')
+                action_type = result.get('action_type', 'NONE')
+                
+                if isinstance(classification, dict):
+                    category = classification.get('category', 'UNKNOWN')
+                    confidence = classification.get('confidence', 0)
+                    reasoning = classification.get('reasoning', 'N/A')
+                    requires_action = classification.get('requires_action', False)
+                else:
+                    category = 'UNKNOWN'
+                    confidence = 0
+                    reasoning = 'N/A'
+                    requires_action = False
+                
+                print(f"Priority: {priority.upper()}")
+                print(f"Action: {action_type.upper()}")
+                print(f"Category: {category.upper()}")
+                print(f"Confidence: {confidence:.2%}")
+                print(f"Reasoning: {reasoning}")
+                print(f"Requires Action: {'YES' if requires_action else 'NO'}")
+                print(f"LLM Invoked: YES")
+                print(f"DB Status: STORED (new)")
             print("--------" * 10)
         else:
             print(f"Error: API returned {response.status_code}")

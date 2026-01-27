@@ -262,11 +262,12 @@ class UnifiedMessageService:
                        content: str, timestamp: int, user_id: str = "default_user",
                        room_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Complete message processing pipeline:
-        1. Classify message
-        2. Decide action
-        3. Persist both message and action
-        4. Return result
+        Complete message processing pipeline - IDEMPOTENT:
+        1. Check if message_id exists (DUPLICATE check FIRST)
+        2. If NEW: Classify -> Decide -> Persist
+        3. If DUPLICATE: Return metadata only (NO classification, NO LLM)
+        
+        Idempotency is binary: NEW or DUPLICATE. Never both.
         
         Args:
             message_id: Unique message ID
@@ -278,21 +279,33 @@ class UnifiedMessageService:
             room_id: Optional room/channel ID
         
         Returns:
-            Result dict with status, message_id, action, classification details
+            NEW: {status: "success", message_id, classification, action_id, action_type, priority}
+            DUPLICATE: {status: "duplicate", message_id, reason: "message_id already exists"}
         """
         try:
-            # Step 1: Classify
-            logger.info(f"Classifying message {message_id}")
+            # CRITICAL: Check for duplicate FIRST, before any classification
+            existing = self.db.message_exists(message_id)
+            
+            if existing:
+                logger.warning(f"Duplicate message: {message_id}")
+                return {
+                    "status": "duplicate",
+                    "message_id": message_id,
+                    "reason": "message_id already exists"
+                }
+            
+            # NEW message - now classify
+            logger.info(f"Processing NEW message: {message_id}")
             classification = self.classifier.classify(content)
             
-            # Step 2: Decide action
+            # Decide action
             user_status_data = self.db.get_user_status(user_id)
             user_status = user_status_data.get('status', 'available')
             action_type = self.decision_maker.decide_action(classification['priority'], user_status)
             
             logger.info(f"Decision: {action_type} for {classification['priority']} message")
             
-            # Step 3: Persist message (with deduplication)
+            # Store message with classification
             message_stored = self.db.store_message(
                 message_id=message_id,
                 platform=platform,
@@ -304,14 +317,15 @@ class UnifiedMessageService:
             )
             
             if not message_stored:
-                logger.warning(f"Message {message_id} was a duplicate - not reprocessing")
+                # Should not happen after our check, but handle it
+                logger.error(f"Failed to store message {message_id}")
                 return {
-                    "status": "duplicate",
+                    "status": "error",
                     "message_id": message_id,
-                    "action": "none"
+                    "reason": "failed to store"
                 }
             
-            # Step 4: Persist action (with deduplication)
+            # Store action
             action_id = self.db.store_action(
                 message_id=message_id,
                 action_type=action_type,
@@ -320,16 +334,7 @@ class UnifiedMessageService:
                 classification_data=classification
             )
             
-            if action_id is None:
-                logger.warning(f"Action for message {message_id} was a duplicate")
-                return {
-                    "status": "duplicate",
-                    "message_id": message_id,
-                    "action": action_type,
-                    "classification": classification
-                }
-            
-            logger.info(f"Message processed successfully: {message_id} -> Action {action_id}")
+            logger.info(f"Message processed: {message_id} -> Action {action_id}")
             
             return {
                 "status": "success",
