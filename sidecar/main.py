@@ -17,6 +17,7 @@ from typing import Optional, Dict, Any, List
 import uvicorn
 import logging
 import os
+import requests
 # Import unified services
 from .database import DatabaseService
 from .message_service import (
@@ -69,6 +70,21 @@ class IncomingMessage(BaseModel):
     room_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = {}
 
+
+class MautrixIncomingMessage(BaseModel):
+    """Incoming payload shape emitted by mautrix connector integration."""
+    message_id: Optional[str] = None
+    id: Optional[str] = None
+    event_id: Optional[str] = None
+    platform: Optional[str] = "whatsapp"
+    room_id: Optional[str] = None
+    sender: Optional[str] = None
+    sender_name: Optional[str] = None
+    timestamp: Optional[int] = None
+    text: Optional[str] = None
+    content: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = {}
+
 class Classification(BaseModel):
     priority: str
     category: str
@@ -85,6 +101,21 @@ class ActionResponse(BaseModel):
     classification: Dict[str, Any]
     status: str
     user_status: Optional[str] = None
+
+
+class BridgeAction(BaseModel):
+    type: str
+    should_reply: bool
+    reply_text: Optional[str] = None
+    notify_user: bool
+
+
+class IncomingBridgeResponse(BaseModel):
+    status: str
+    message_id: str
+    action: BridgeAction
+    priority: str
+    classification: Dict[str, Any]
 
 class UserStatus(BaseModel):
     user_id: str = "default_user"
@@ -141,6 +172,117 @@ async def classify_message_endpoint(message: IncomingMessage):
     except Exception as e:
         logger.error(f"Endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _normalize_mautrix_payload(payload: MautrixIncomingMessage) -> IncomingMessage:
+    """Map mautrix bridge payloads into the connector's canonical message schema."""
+    message_id = payload.message_id or payload.id or payload.event_id
+    content = payload.content or payload.text
+    sender = payload.sender or payload.sender_name
+
+    if not message_id:
+        raise HTTPException(status_code=400, detail="Missing message ID (message_id/id/event_id)")
+    if not content:
+        raise HTTPException(status_code=400, detail="Missing message content (content/text)")
+    if not sender:
+        raise HTTPException(status_code=400, detail="Missing sender")
+
+    from time import time
+    timestamp = payload.timestamp or int(time())
+    # Some Matrix/mautrix timestamps are milliseconds; normalize to unix seconds.
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp // 1000
+
+    return IncomingMessage(
+        id=message_id,
+        platform=(payload.platform or "whatsapp").lower(),
+        sender=sender,
+        content=content,
+        timestamp=timestamp,
+        room_id=payload.room_id,
+        metadata=payload.metadata or {}
+    )
+
+
+def _action_to_bridge_response(result: Dict[str, Any]) -> BridgeAction:
+    action_type = result.get("action_type", "none")
+    should_reply = action_type == "auto_reply"
+    notify_user = action_type in {"notify", "remind"}
+
+    user_status = db_service.get_user_status("default_user")
+    auto_reply_message = user_status.get("auto_reply") or "I'm currently unavailable. I'll get back to you soon."
+
+    return BridgeAction(
+        type=action_type,
+        should_reply=should_reply,
+        reply_text=auto_reply_message if should_reply else None,
+        notify_user=notify_user,
+    )
+
+
+def _emit_bridge_action(message: IncomingMessage, result: Dict[str, Any], action: BridgeAction) -> None:
+    """Best-effort webhook for forwarding action decisions to mautrix-aware workers."""
+    callback_url = os.getenv("MAUTRIX_ACTION_WEBHOOK")
+    if not callback_url:
+        return
+
+    payload = {
+        "message_id": result.get("message_id", message.id),
+        "room_id": message.room_id,
+        "sender": message.sender,
+        "platform": message.platform,
+        "action": action.model_dump(),
+        "classification": result.get("classification", {}),
+        "priority": result.get("priority", "unknown"),
+    }
+
+    try:
+        resp = requests.post(callback_url, json=payload, timeout=2)
+        if resp.status_code >= 300:
+            logger.warning("MAUTRIX_ACTION_WEBHOOK returned %s", resp.status_code)
+    except Exception as exc:
+        logger.warning("MAUTRIX_ACTION_WEBHOOK unreachable: %s", exc)
+
+
+@app.post("/api/messages/incoming", response_model=IncomingBridgeResponse)
+async def process_mautrix_incoming(payload: MautrixIncomingMessage):
+    """
+    Entry-point for mautrix bridge events.
+    Accepts bridge payload shape and routes through the same idempotent classifier pipeline.
+    """
+    message = _normalize_mautrix_payload(payload)
+    result = message_service.process_message(
+        message_id=message.id,
+        platform=message.platform,
+        sender=message.sender,
+        content=message.content,
+        timestamp=message.timestamp,
+        room_id=message.room_id,
+    )
+
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result.get("error", "Processing failed"))
+
+    if result["status"] == "duplicate":
+        action = BridgeAction(type="none", should_reply=False, reply_text=None, notify_user=False)
+        return IncomingBridgeResponse(
+            status="duplicate",
+            message_id=message.id,
+            action=action,
+            priority="unknown",
+            classification={},
+        )
+
+    bridge_action = _action_to_bridge_response(result)
+    _emit_bridge_action(message, result, bridge_action)
+
+    return IncomingBridgeResponse(
+        status="success",
+        message_id=result["message_id"],
+        action=bridge_action,
+        priority=result["priority"],
+        classification=result["classification"],
+    )
 
 @app.post("/api/user/status")
 async def update_user_status(status: UserStatus):
