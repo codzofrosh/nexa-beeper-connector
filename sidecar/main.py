@@ -25,6 +25,7 @@ from .message_service import (
     ActionDecisionService,
     UnifiedMessageService
 )
+from .mautrix_service import MautrixBridgeService
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,7 @@ classifier_service = MessageClassificationService(
     hf_model=HF_MODEL
 )
 message_service = UnifiedMessageService(db_service, classifier_service)
+mautrix_service = MautrixBridgeService(db_service)
 
 logger.info(f"Services initialized: DB={DB_PATH}, Ollama={classifier_service.ollama_available}")
 
@@ -121,6 +123,36 @@ class UserStatus(BaseModel):
     user_id: str = "default_user"
     status: str
     auto_reply_message: Optional[str] = None
+
+
+class MautrixAuthRequest(BaseModel):
+    user_id: str = "default_user"
+    base_url: str
+    mxid: Optional[str] = None
+    password: Optional[str] = None
+    access_token: Optional[str] = None
+    device_name: str = "nexa-connector"
+
+
+class MautrixAuthResponse(BaseModel):
+    user_id: str
+    base_url: str
+    matrix_user_id: Optional[str] = None
+    device_id: Optional[str] = None
+    access_token: str
+
+
+class IntegrationConnectRequest(BaseModel):
+    user_id: str = "default_user"
+    app: str
+    config: Optional[Dict[str, Any]] = {}
+
+
+class IntegrationConnectResponse(BaseModel):
+    user_id: str
+    app: str
+    status: str
+    config: Dict[str, Any]
 
 
 # ============================================
@@ -231,7 +263,7 @@ def _emit_bridge_action(message: IncomingMessage, result: Dict[str, Any], action
         "room_id": message.room_id,
         "sender": message.sender,
         "platform": message.platform,
-        "action": action.model_dump(),
+        "action": _model_to_dict(action),
         "classification": result.get("classification", {}),
         "priority": result.get("priority", "unknown"),
     }
@@ -243,6 +275,13 @@ def _emit_bridge_action(message: IncomingMessage, result: Dict[str, Any], action
     except Exception as exc:
         logger.warning("MAUTRIX_ACTION_WEBHOOK unreachable: %s", exc)
 
+
+
+
+def _model_to_dict(model: BaseModel) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
 
 @app.post("/api/messages/incoming", response_model=IncomingBridgeResponse)
 async def process_mautrix_incoming(payload: MautrixIncomingMessage):
@@ -283,6 +322,50 @@ async def process_mautrix_incoming(payload: MautrixIncomingMessage):
         priority=result["priority"],
         classification=result["classification"],
     )
+
+
+
+@app.post("/api/mautrix/auth", response_model=MautrixAuthResponse)
+async def mautrix_authenticate(request: MautrixAuthRequest):
+    """Authenticate against mautrix/Matrix and persist access token for connector usage."""
+    try:
+        result = mautrix_service.authenticate(
+            user_id=request.user_id,
+            base_url=request.base_url,
+            mxid=request.mxid,
+            password=request.password,
+            access_token=request.access_token,
+            device_name=request.device_name,
+        )
+        return MautrixAuthResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Mautrix authentication failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/mautrix/integrations/connect", response_model=IntegrationConnectResponse)
+async def connect_mautrix_integration(request: IntegrationConnectRequest):
+    """Register a mautrix-backed app integration (whatsapp now, extensible to more apps)."""
+    try:
+        result = mautrix_service.connect_integration(
+            user_id=request.user_id,
+            app=request.app,
+            config=request.config or {},
+        )
+        return IntegrationConnectResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Integration connect failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mautrix/integrations")
+async def list_mautrix_integrations(user_id: str = "default_user"):
+    """List currently connected mautrix-backed apps for a connector user."""
+    return {"user_id": user_id, "integrations": mautrix_service.list_integrations(user_id)}
 
 @app.post("/api/user/status")
 async def update_user_status(status: UserStatus):

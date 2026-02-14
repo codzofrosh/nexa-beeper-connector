@@ -81,6 +81,12 @@ API Endpoints
 - `GET /api/stats` - Get system statistics
 - `GET /health` - Health check
 
+**Mautrix Bridge Integration**
+- `POST /api/mautrix/auth` - Authenticate with mautrix/Matrix and store access token
+- `POST /api/mautrix/integrations/connect` - Connect an app integration (e.g. whatsapp)
+- `GET /api/mautrix/integrations?user_id=default_user` - List connected mautrix-backed apps
+- `POST /api/messages/incoming` - Receive mautrix bridge message payloads
+
 Quick Start
 -----------
 1. **Install dependencies**:
