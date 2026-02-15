@@ -90,6 +90,32 @@ class DatabaseService:
                         cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+
+                # Mautrix sessions table - stores authenticated bridge tokens per connector user
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS mautrix_sessions (
+                        user_id TEXT PRIMARY KEY,
+                        base_url TEXT NOT NULL,
+                        matrix_user_id TEXT,
+                        access_token TEXT NOT NULL,
+                        device_id TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                # App integrations table - tracks enabled mautrix-backed apps (whatsapp, telegram, ...)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS app_integrations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        app TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        config TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, app)
+                    )
+                """)
                 
                 conn.commit()
                 logger.info("Database schema initialized successfully")
@@ -409,5 +435,99 @@ class DatabaseService:
             except Exception as e:
                 logger.error(f"Cache cleanup failed: {e}")
                 conn.rollback()
+            finally:
+                conn.close()
+
+
+    def upsert_mautrix_session(self, user_id: str, base_url: str, access_token: str,
+                               matrix_user_id: Optional[str] = None,
+                               device_id: Optional[str] = None) -> bool:
+        """Create or update mautrix session details for a connector user."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO mautrix_sessions (user_id, base_url, matrix_user_id, access_token, device_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        base_url = excluded.base_url,
+                        matrix_user_id = excluded.matrix_user_id,
+                        access_token = excluded.access_token,
+                        device_id = excluded.device_id,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (user_id, base_url, matrix_user_id, access_token, device_id),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to upsert mautrix session for {user_id}: {e}")
+                conn.rollback()
+                return False
+            finally:
+                conn.close()
+
+    def get_mautrix_session(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch stored mautrix session for a connector user."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT user_id, base_url, matrix_user_id, access_token, device_id, updated_at FROM mautrix_sessions WHERE user_id = ?",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+
+    def upsert_app_integration(self, user_id: str, app: str, status: str,
+                               config: Optional[Dict[str, Any]] = None) -> bool:
+        """Create or update app integration metadata for a user."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                config_json = json.dumps(config or {})
+                cursor.execute(
+                    """
+                    INSERT INTO app_integrations (user_id, app, status, config, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id, app) DO UPDATE SET
+                        status = excluded.status,
+                        config = excluded.config,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (user_id, app, status, config_json),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to upsert app integration {app} for {user_id}: {e}")
+                conn.rollback()
+                return False
+            finally:
+                conn.close()
+
+    def list_app_integrations(self, user_id: str) -> List[Dict[str, Any]]:
+        """List all configured app integrations for the user."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT app, status, config, created_at, updated_at FROM app_integrations WHERE user_id = ? ORDER BY app ASC",
+                    (user_id,),
+                )
+                rows = cursor.fetchall()
+                integrations = []
+                for row in rows:
+                    item = dict(row)
+                    item["config"] = json.loads(item.get("config") or "{}")
+                    integrations.append(item)
+                return integrations
             finally:
                 conn.close()
