@@ -8,7 +8,6 @@ import sqlite3
 import threading
 import logging
 from typing import Optional, Dict, Any, List
-from pathlib import Path
 from datetime import datetime
 import json
 
@@ -77,6 +76,27 @@ class DatabaseService:
                         status TEXT DEFAULT 'available',
                         auto_reply_message TEXT,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        email TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS auth_sessions (
+                        token TEXT PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users(id)
                     )
                 """)
                 
@@ -388,6 +408,129 @@ class DatabaseService:
                     "priority_breakdown": priority_breakdown,
                     "classifier_breakdown": classifier_breakdown
                 }
+            finally:
+                conn.close()
+
+    def create_user(self, name: str, email: str, password_hash: str) -> Optional[Dict[str, Any]]:
+        """Create a user account and return the created user."""
+        normalized_email = email.strip().lower()
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    INSERT INTO users (name, email, password_hash, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """, (name.strip(), normalized_email, password_hash))
+                conn.commit()
+                user_id = cursor.lastrowid
+                return {
+                    "id": user_id,
+                    "name": name.strip(),
+                    "email": normalized_email,
+                }
+            except sqlite3.IntegrityError:
+                logger.info(f"User already exists: {normalized_email}")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to create user {normalized_email}: {e}")
+                conn.rollback()
+                return None
+            finally:
+                conn.close()
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Fetch a user by email address."""
+        normalized_email = email.strip().lower()
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    SELECT id, name, email, password_hash, created_at, updated_at
+                    FROM users
+                    WHERE email = ?
+                    LIMIT 1
+                """, (normalized_email,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a user by numeric id."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    SELECT id, name, email, created_at, updated_at
+                    FROM users
+                    WHERE id = ?
+                    LIMIT 1
+                """, (user_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+
+    def create_auth_session(self, user_id: int, token: str, expires_at: str) -> bool:
+        """Persist an auth session token for a user."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    INSERT INTO auth_sessions (token, user_id, expires_at)
+                    VALUES (?, ?, ?)
+                """, (token, user_id, expires_at))
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to create auth session for user {user_id}: {e}")
+                conn.rollback()
+                return False
+            finally:
+                conn.close()
+
+    def get_user_by_session(self, token: str) -> Optional[Dict[str, Any]]:
+        """Return the session user if the token exists and is not expired."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    SELECT u.id, u.name, u.email, s.expires_at
+                    FROM auth_sessions s
+                    JOIN users u ON u.id = s.user_id
+                    WHERE s.token = ?
+                      AND datetime(s.expires_at) > datetime('now')
+                    LIMIT 1
+                """, (token,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+
+    def delete_auth_session(self, token: str) -> bool:
+        """Delete a session token."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to delete auth session: {e}")
+                conn.rollback()
+                return False
             finally:
                 conn.close()
     
