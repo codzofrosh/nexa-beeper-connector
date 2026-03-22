@@ -62,6 +62,35 @@ Environment variables:
 - `USE_OLLAMA`: Enable Ollama (default: true)
 - `HF_API_KEY`: Hugging Face API key for cloud classification
 - `DB_PATH`: SQLite database path (default: data/nexa.db)
+- `MATRIX_HOMESERVER`: Matrix homeserver base URL for bot/client mode
+- `MATRIX_ACCESS_TOKEN`: Matrix access token for bot/client mode
+- `MATRIX_USER`: Matrix user ID for the bot/client
+- `MAUTRIX_HOMESERVER`: Preferred homeserver base URL for bridge execution mode
+- `MAUTRIX_ACCESS_TOKEN`: Preferred access token for bridge execution mode
+- `MAUTRIX_IMPERSONATE_USER_ID`: Optional appservice user ID to masquerade as when sending into bridged rooms
+- `MAUTRIX_DEVICE_ID`: Optional device ID to include when using application-service identity assertion
+
+Mautrix / bridge execution
+--------------------------
+The bridge executor sends outbound messages by posting `m.room.message` events
+to Matrix rooms. When those rooms are bridged by mautrix-whatsapp, the bridge
+forwards the messages to WhatsApp.
+
+The outbound adapter supports two authentication modes:
+
+1. **Bot/client token mode**
+   - set `MATRIX_HOMESERVER` + `MATRIX_ACCESS_TOKEN`, or
+   - set `MAUTRIX_HOMESERVER` + `MAUTRIX_ACCESS_TOKEN`
+
+2. **Application-service masquerading mode**
+   - set `MAUTRIX_HOMESERVER`
+   - set `MAUTRIX_ACCESS_TOKEN` to the appservice token
+   - set `MAUTRIX_IMPERSONATE_USER_ID` to the Matrix user ID the appservice
+     should send as
+   - optionally set `MAUTRIX_DEVICE_ID`
+
+In both cases, the bridge uses Matrix transaction IDs for idempotent sends, so
+the same executor retry will reuse the same `txnId`.
 
 API Endpoints
 -------------

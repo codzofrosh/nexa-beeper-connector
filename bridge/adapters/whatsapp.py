@@ -1,34 +1,29 @@
 import logging
-import uuid
+from functools import lru_cache
+
+from bridge.adapters.mautrix import MautrixConfig, MautrixSender
 
 log = logging.getLogger("bridge.whatsapp")
 
-# in-memory idempotency store (TEMP – replace later)
-_SENT = set()
+
+@lru_cache(maxsize=1)
+def _get_sender() -> MautrixSender:
+    """Build the sender lazily so tests can patch env per-process."""
+    return MautrixSender(MautrixConfig.from_env())
 
 def send_whatsapp(*, room: str, text: str, idempotency_key: str) -> str:
     """
-    Simulate WhatsApp send.
+    Send into a mautrix-whatsapp bridged Matrix room.
 
     Must be:
     - idempotent
     - raise on failure
     - return external message id
     """
-
-    if idempotency_key in _SENT:
-        log.info("WhatsApp duplicate suppressed: %s", idempotency_key)
-        return idempotency_key  # exactly-once illusion
-
-    # simulate send
-    #external_id = f"wa-{uuid.uuid4().hex[:8]}"
-    log.info(
-        "📤 WhatsApp SEND | room=%s | key=%s | text=%s",
-        room,
-        idempotency_key,
-        text,
+    event_id = _get_sender().send_text(
+        room_id=room,
+        text=text,
+        txn_id=idempotency_key,
     )
-    _SENT.add(idempotency_key)
-    return idempotency_key
-
-
+    log.info("📤 WhatsApp SEND | room=%s | key=%s | event_id=%s", room, idempotency_key, event_id)
+    return event_id

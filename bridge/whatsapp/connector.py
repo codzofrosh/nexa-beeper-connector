@@ -28,12 +28,15 @@ class WhatsAppConnector:
         Send it to your existing sidecar API
         """
         try:
+            if self.session is None:
+                await self.initialize()
+
             # Transform Matrix event to your format
             message = self._transform_event(event)
             
-            # Send to your existing app.py endpoint
+            # Send to the unified sidecar classification endpoint
             async with self.session.post(
-                f"{self.sidecar_url}/api/messages/incoming",
+                f"{self.sidecar_url}/api/messages/classify",
                 json=message
             ) as resp:
                 if resp.status == 200:
@@ -65,12 +68,12 @@ class WhatsAppConnector:
         Execute the action returned by your sidecar
         This calls back to Matrix to send messages
         """
-        action_type = action.get('action', {}).get('type')
+        action_type = action.get('action_type')
         
         if action_type == 'auto_reply':
             await self._send_reply(
                 original_event['room_id'],
-                action['action']['message']
+                action.get('classification', {}).get('reasoning', "I'm currently unavailable.")
             )
         elif action_type == 'notify':
             # Trigger notification (use your existing notification system)
