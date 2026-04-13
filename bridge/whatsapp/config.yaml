@@ -1,0 +1,97 @@
+# mautrix-whatsapp bridge configuration
+# Generated tokens (as_token / hs_token) are filled in by:
+#   python bridge/auth/setup.py
+#
+# Do NOT edit as_token / hs_token manually — they must match
+# the values in whatsapp-registration.yaml that Conduit reads.
+
+homeserver:
+  # Internal Docker address of the Conduit homeserver
+  address: http://conduit:6167
+  # Public server name (must match MATRIX_SERVER_NAME in .env)
+  domain: localhost
+  software: standard
+  status_endpoint: ~
+  message_send_checkpoint_endpoint: ~
+  async_media: false
+
+appservice:
+  # Where the bridge listens (inside Docker)
+  address: http://mautrix-whatsapp:29318
+  hostname: 0.0.0.0
+  port: 29318
+  max_body_size: 1
+
+  database:
+    type: sqlite3-fk-wal
+    uri: file:/data/mautrix-whatsapp.db?_txlock=immediate
+
+  id: whatsapp
+
+  bot:
+    username: whatsappbot
+    displayname: WhatsApp Bridge Bot
+    avatar: mxc://maunium.net/NeXNQarUbrlYBiPCpprYsRqr
+
+  # These are filled in by setup.py — do not edit
+  as_token: "REPLACE_WITH_AS_TOKEN"
+  hs_token: "REPLACE_WITH_HS_TOKEN"
+
+  ephemeral_events: true
+  async_transactions: false
+
+bridge:
+  username_template: whatsapp_{{.}}
+  displayname_template: "{{if .PushName}}{{.PushName}}{{else if .BusinessName}}{{.BusinessName}}{{else}}{{.JID}}{{end}} (WA)"
+  personal_filtering_spaces: true
+  bridge_notices: true
+  send_presence_on_typing: false
+  unimportant_bridge_notices: true
+  disable_bridge_alerts: false
+  migrate_config: true
+
+  # Who can use the bridge
+  # "*" = any user on this homeserver can connect their WhatsApp
+  permissions:
+    "*": "user"
+    "@admin:localhost": "admin"
+
+  relay:
+    enabled: false
+
+  history_sync:
+    request_full_sync: false
+    full_sync_wait_time: 0
+    max_initial_conversations: 20
+    sync_loop_limit: 100
+    backfill: true
+    double_puppet_backfill: false
+    deferred_minutes:
+      - 1
+      - 2
+      - 5
+      - 10
+
+  message_handling_timeout:
+    error_after: ~
+    deadline: 120s
+
+  url_previews: false
+
+  encryption:
+    allow: false
+    default: false
+    appservice: false
+    require: false
+
+  delivery_receipts: false
+  send_error_notices: true
+  caption_in_message: false
+  beeper_galleries: false
+
+logging:
+  min_level: warn
+  writers:
+    - type: stdout
+      format: pretty-colored
+      min_level: info
