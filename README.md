@@ -9,6 +9,7 @@ The system is designed to be lightweight, self-contained, and easily deployable 
 
 Key Features
 ------------
+- **Login & Session Auth Starter**: Browser-based login/register page with name, email, password, and sidecar session cookies
 - **AI-Powered Message Classification**: Classifies messages by priority (urgent, high, normal, low) and category (work, personal, social, marketing)
 - **Multi-Backend LLM Support**: Supports Ollama (local), OpenAI, Anthropic Claude, Hugging Face, or custom API backends
 - **Flexible Fallback System**: Rule-based classification falls back when LLMs are unavailable
@@ -32,6 +33,8 @@ Directory roles
   - Main FastAPI service that handles message classification
   - Accepts messages via HTTP API, runs classification, stores results
   - Provides endpoints for:
+    - Auth UI: `GET /` and `GET /login`
+    - Auth APIs: `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
     - Message classification: `POST /api/messages/classify`
     - User status management: `GET/POST /api/user/status`
     - Pending actions: `GET /api/actions/pending`
@@ -97,6 +100,13 @@ API Endpoints
 **Classification**
 - `POST /api/messages/classify` - Classify a message
   - Returns: priority, action type, classification details
+
+**Authentication**
+- `GET /` or `GET /login` - Login/register page
+- `POST /api/auth/register` - Create account with name, email, password
+- `POST /api/auth/login` - Login with email and password
+- `GET /api/auth/me` - Read current session user
+- `POST /api/auth/logout` - Clear current session
 
 **User Status**
 - `GET /api/user/status?user_id=default_user` - Get user status

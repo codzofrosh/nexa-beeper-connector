@@ -11,13 +11,15 @@ This module integrates:
 All combined into a single unified service pipeline.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, Cookie
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import re
 import uvicorn
 import logging
 import os
+from datetime import datetime, timedelta
 # Import unified services
 from .database import DatabaseService
 from .message_service import (
@@ -25,12 +27,15 @@ from .message_service import (
     ActionDecisionService,
     UnifiedMessageService
 )
+from .auth import hash_password, verify_password, create_session_token
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Nexa Beeper Sidecar", version="1.0.0")
+SESSION_COOKIE_NAME = "nexa_session"
+SESSION_TTL_HOURS = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
 
 # ============================================
 # SERVICE INITIALIZATION
@@ -116,10 +121,186 @@ class UserStatus(BaseModel):
     status: str
     auto_reply_message: Optional[str] = None
 
+class RegisterUserRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class LoginUserRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _session_expiry() -> str:
+    return (datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_TTL_HOURS * 3600,
+    )
+
+
+def _auth_page_html() -> str:
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexa Auth</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 32px; }
+    .wrap { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+    .card { background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    h1, h2 { margin-top: 0; }
+    label { display: block; font-size: 14px; margin: 14px 0 6px; color: #cbd5e1; }
+    input { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: 1px solid #475569; background: #020617; color: #f8fafc; }
+    button { margin-top: 16px; width: 100%; padding: 12px; border-radius: 10px; border: none; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .muted { color: #94a3b8; line-height: 1.5; }
+    .status { margin-top: 12px; min-height: 20px; color: #7dd3fc; }
+    code { background: #020617; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Nexa Login</h1>
+      <p class="muted">Start with account auth first. Register with your name, email, and password, then log in to create a session cookie for the sidecar.</p>
+      <form id="login-form">
+        <label for="login-email">Email</label>
+        <input id="login-email" name="email" type="email" placeholder="you@example.com" required />
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" placeholder="••••••••" required />
+        <button type="submit">Log in</button>
+      </form>
+      <div id="login-status" class="status"></div>
+    </div>
+    <div class="card">
+      <h2>Create account</h2>
+      <p class="muted">This creates the initial user record that we can later tie to mautrix-specific credentials and bridge configuration.</p>
+      <form id="register-form">
+        <label for="register-name">Name</label>
+        <input id="register-name" name="name" type="text" placeholder="Jane Doe" required />
+        <label for="register-email">Email</label>
+        <input id="register-email" name="email" type="email" placeholder="jane@example.com" required />
+        <label for="register-password">Password</label>
+        <input id="register-password" name="password" type="password" placeholder="Choose a strong password" required />
+        <button type="submit">Create account</button>
+      </form>
+      <div id="register-status" class="status"></div>
+    </div>
+  </div>
+  <script>
+    async function submitJson(formId, url, statusId) {
+      const form = document.getElementById(formId);
+      const status = document.getElementById(statusId);
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        status.textContent = 'Submitting...';
+        const payload = Object.fromEntries(new FormData(form).entries());
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          status.textContent = data.detail || 'Request failed';
+          status.style.color = '#fda4af';
+          return;
+        }
+        status.textContent = JSON.stringify(data);
+        status.style.color = '#86efac';
+      });
+    }
+    submitJson('login-form', '/api/auth/login', 'login-status');
+    submitJson('register-form', '/api/auth/register', 'register-status');
+  </script>
+</body>
+</html>"""
+
 
 # ============================================
 # API ENDPOINTS
 # ============================================
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/login", response_class=HTMLResponse)
+async def auth_page():
+    """Serve the initial login/register page."""
+    return HTMLResponse(_auth_page_html())
+
+@app.post("/api/auth/register")
+async def register_user(payload: RegisterUserRequest, response: Response):
+    """Create a sidecar user account and login session."""
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+
+    created_user = db_service.create_user(
+        name=payload.name,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+    )
+    if not created_user:
+        raise HTTPException(status_code=409, detail="An account with that email already exists")
+
+    token = create_session_token()
+    if not db_service.create_auth_session(created_user["id"], token, _session_expiry()):
+        raise HTTPException(status_code=500, detail="Failed to create auth session")
+
+    _set_session_cookie(response, token)
+    return {
+        "success": True,
+        "user": created_user,
+        "message": "Account created",
+    }
+
+@app.post("/api/auth/login")
+async def login_user(payload: LoginUserRequest, response: Response):
+    """Authenticate an existing user with email/password."""
+    user = db_service.get_user_by_email(payload.email)
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_session_token()
+    if not db_service.create_auth_session(user["id"], token, _session_expiry()):
+        raise HTTPException(status_code=500, detail="Failed to create auth session")
+
+    _set_session_cookie(response, token)
+    return {
+        "success": True,
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+        },
+        "message": "Logged in",
+    }
+
+@app.get("/api/auth/me")
+async def get_current_user(session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
+    """Return the current user associated with the session cookie."""
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user = db_service.get_user_by_session(session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    return {"authenticated": True, "user": user}
+
+@app.post("/api/auth/logout")
+async def logout_user(response: Response, session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
+    """Delete the current session."""
+    if session_token:
+        db_service.delete_auth_session(session_token)
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return {"success": True, "message": "Logged out"}
 
 @app.post("/api/messages/classify", response_model=ActionResponse)
 async def classify_message_endpoint(message: IncomingMessage):
