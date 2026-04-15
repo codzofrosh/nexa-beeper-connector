@@ -37,6 +37,7 @@ services:
       - ./bridge/synapse/homeserver.yaml:/config/homeserver.yaml:ro
       - ./bridge/synapse/logging.yaml:/config/logging.yaml:ro
       - ./bridge/whatsapp/whatsapp-registration.yaml:/config/whatsapp-registration.yaml:ro
+      - ./bridge/linkedin/linkedin-registration.yaml:/config/linkedin-registration.yaml:ro
       # Data volume — fully writable, Synapse stores DB / signing key / media here
       - synapse_data:/data
     ports:
@@ -57,6 +58,19 @@ services:
     networks:
       - nexa-network
 
+  # ── mautrix-linkedin bridge ───────────────────────────────────────────────
+  mautrix-linkedin:
+    image: dock.mau.dev/mautrix/linkedin:latest
+    container_name: nexa-linkedin-bridge
+    restart: unless-stopped
+    depends_on:
+      - conduit
+    volumes:
+      - ./bridge/linkedin/config.yaml:/data/config.yaml:ro
+      - linkedin_data:/data
+    networks:
+      - nexa-network
+
   # ── Nexa sidecar (AI + API) ───────────────────────────────────────────────
   nexa-sidecar:
     build: .
@@ -72,8 +86,9 @@ services:
       MATRIX_USER:           "${MATRIX_USER}"
       MATRIX_ACCESS_TOKEN:   "${MATRIX_ACCESS_TOKEN}"
 
-      # Bridge bot (created by mautrix-whatsapp on first run)
+      # Bridge bots (created by their respective bridges on first run)
       WHATSAPP_BRIDGE_BOT:   "@whatsappbot:${MATRIX_SERVER_NAME:-localhost}"
+      LINKEDIN_BRIDGE_BOT:   "@linkedinbot:${MATRIX_SERVER_NAME:-localhost}"
 
       # Sidecar config
       ENABLE_EXECUTOR:  "1"
@@ -81,6 +96,13 @@ services:
       SQLITE_PATH:      "/data/nexa.db"
       DB_PATH:          "/data/nexa.db"
       SIDECAR_URL:      "http://localhost:8080"
+
+      # OAuth (optional — omit to disable provider buttons on the login page)
+      GOOGLE_CLIENT_ID:     "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+      GITHUB_CLIENT_ID:     "${GITHUB_CLIENT_ID:-}"
+      GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET:-}"
+      OAUTH_REDIRECT_BASE_URL: "${OAUTH_REDIRECT_BASE_URL:-http://localhost:8080}"
 
       # AI (optional — falls back to rule-based if not set)
       OLLAMA_URL:   "${OLLAMA_URL:-http://host.docker.internal:11434}"
@@ -98,6 +120,7 @@ volumes:
   nexa_data:
   synapse_data:
   whatsapp_data:
+  linkedin_data:
 
 networks:
   nexa-network:
