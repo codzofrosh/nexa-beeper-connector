@@ -12,7 +12,7 @@ All combined into a single unified service pipeline.
 """
 
 from fastapi import FastAPI, HTTPException, Response, Cookie
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import re
@@ -28,12 +28,32 @@ from .message_service import (
     UnifiedMessageService
 )
 from .auth import hash_password, verify_password, create_session_token
+from . import oauth as _oauth
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Nexa Beeper Sidecar", version="1.0.0")
+app = FastAPI(
+    title="Nexa Sidecar API",
+    version="1.0.0",
+    description=(
+        "AI message classification and bridge management for WhatsApp and LinkedIn via Matrix.\n\n"
+        "**Auth:** Most endpoints are unauthenticated (the sidecar runs in a trusted internal network). "
+        "User-facing auth endpoints set an `HttpOnly` session cookie (`nexa_session`). "
+        "Include `credentials: 'include'` in all `fetch()` calls from a browser.\n\n"
+        "**Base URL:** `http://localhost:8080` in local dev, or the value of `SIDECAR_URL` in production.\n\n"
+        "**Interactive guide:** `GET /dev` — full frontend integration guide with code examples."
+    ),
+    openapi_tags=[
+        {"name": "auth",       "description": "Register, login, logout, OAuth (Google / GitHub)"},
+        {"name": "onboarding", "description": "WhatsApp QR-code onboarding flow"},
+        {"name": "bridge",     "description": "Connect / disconnect WhatsApp and LinkedIn bridges"},
+        {"name": "messages",   "description": "Classify incoming messages and retrieve history"},
+        {"name": "user",       "description": "User availability status and pending actions"},
+        {"name": "system",     "description": "Health check and statistics"},
+    ],
+)
 SESSION_COOKIE_NAME = "nexa_session"
 SESSION_TTL_HOURS = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
 
@@ -48,6 +68,9 @@ USE_OLLAMA   = os.getenv("USE_OLLAMA", "true").lower() == "true"
 HF_API_KEY   = os.getenv("HF_API_KEY")
 HF_MODEL     = os.getenv("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
 
+# OAuth config
+_OAUTH_REDIRECT_BASE = os.getenv("OAUTH_REDIRECT_BASE_URL", "http://localhost:8080")
+
 # Matrix / onboarding config
 _MATRIX_HOMESERVER  = os.getenv("MATRIX_HOMESERVER", "http://conduit:6167")
 _MATRIX_SERVER_NAME = os.getenv("MATRIX_SERVER_NAME", "localhost")
@@ -56,6 +79,17 @@ _BRIDGE_BOT_ID      = os.getenv(
     "WHATSAPP_BRIDGE_BOT",
     f"@whatsappbot:{os.getenv('MATRIX_SERVER_NAME', 'localhost')}",
 )
+
+# Platform → bridge bot Matrix ID (env vars take priority over defaults)
+_PLATFORM_BOT_IDS: dict = {
+    "whatsapp": os.getenv("WHATSAPP_BRIDGE_BOT", f"@whatsappbot:{_MATRIX_SERVER_NAME}"),
+    "linkedin": os.getenv("LINKEDIN_BRIDGE_BOT", f"@linkedinbot:{_MATRIX_SERVER_NAME}"),
+}
+
+
+def _resolve_bridge_bot(platform: str, override: Optional[str] = None) -> Optional[str]:
+    """Return the bridge bot Matrix ID for a platform, respecting env var overrides."""
+    return override or _PLATFORM_BOT_IDS.get(platform)
 
 # Initialize services
 db_service = DatabaseService(db_path=DB_PATH)
@@ -154,45 +188,72 @@ def _auth_page_html() -> str:
   <title>Nexa Auth</title>
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 32px; }
-    .wrap { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+    .outer { max-width: 980px; margin: 0 auto; }
+    .oauth-section { margin-bottom: 28px; }
+    .oauth-section h2 { margin: 0 0 16px; font-size: 18px; color: #94a3b8; font-weight: 500; text-align: center; }
+    .oauth-buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .btn-oauth { display: flex; align-items: center; gap: 10px; padding: 12px 24px; border-radius: 10px;
+                 border: 1px solid #334155; background: #111827; color: #e2e8f0; font-size: 15px;
+                 font-weight: 600; cursor: pointer; text-decoration: none; transition: background .15s; }
+    .btn-oauth:hover { background: #1e293b; }
+    .btn-oauth svg { flex-shrink: 0; }
+    .divider { display: flex; align-items: center; gap: 12px; margin: 8px 0 28px; color: #475569; font-size: 13px; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #1e293b; }
+    .wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
     .card { background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
     h1, h2 { margin-top: 0; }
     label { display: block; font-size: 14px; margin: 14px 0 6px; color: #cbd5e1; }
     input { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 10px; border: 1px solid #475569; background: #020617; color: #f8fafc; }
-    button { margin-top: 16px; width: 100%; padding: 12px; border-radius: 10px; border: none; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
-    button:hover { background: #1d4ed8; }
+    button[type=submit] { margin-top: 16px; width: 100%; padding: 12px; border-radius: 10px; border: none; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+    button[type=submit]:hover { background: #1d4ed8; }
     .muted { color: #94a3b8; line-height: 1.5; }
     .status { margin-top: 12px; min-height: 20px; color: #7dd3fc; }
     code { background: #020617; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Nexa Login</h1>
-      <p class="muted">Start with account auth first. Register with your name, email, and password, then log in to create a session cookie for the sidecar.</p>
-      <form id="login-form">
-        <label for="login-email">Email</label>
-        <input id="login-email" name="email" type="email" placeholder="you@example.com" required />
-        <label for="login-password">Password</label>
-        <input id="login-password" name="password" type="password" placeholder="••••••••" required />
-        <button type="submit">Log in</button>
-      </form>
-      <div id="login-status" class="status"></div>
+  <div class="outer">
+    <div class="oauth-section">
+      <h2>Sign in with</h2>
+      <div class="oauth-buttons">
+        <a class="btn-oauth" href="/api/auth/oauth/google/start">
+          <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.29-8.16 2.29-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Continue with Google
+        </a>
+        <a class="btn-oauth" href="/api/auth/oauth/github/start">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="#e2e8f0"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.03c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.4c1.02 0 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.65.25 2.87.12 3.17.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58C20.56 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/></svg>
+          Continue with GitHub
+        </a>
+      </div>
     </div>
-    <div class="card">
-      <h2>Create account</h2>
-      <p class="muted">This creates the initial user record that we can later tie to mautrix-specific credentials and bridge configuration.</p>
-      <form id="register-form">
-        <label for="register-name">Name</label>
-        <input id="register-name" name="name" type="text" placeholder="Jane Doe" required />
-        <label for="register-email">Email</label>
-        <input id="register-email" name="email" type="email" placeholder="jane@example.com" required />
-        <label for="register-password">Password</label>
-        <input id="register-password" name="password" type="password" placeholder="Choose a strong password" required />
-        <button type="submit">Create account</button>
-      </form>
-      <div id="register-status" class="status"></div>
+    <div class="divider">or use email &amp; password</div>
+    <div class="wrap">
+      <div class="card">
+        <h1>Log in</h1>
+        <p class="muted">Enter your email and password to create a session cookie for the sidecar.</p>
+        <form id="login-form">
+          <label for="login-email">Email</label>
+          <input id="login-email" name="email" type="email" placeholder="you@example.com" required />
+          <label for="login-password">Password</label>
+          <input id="login-password" name="password" type="password" placeholder="••••••••" required />
+          <button type="submit">Log in</button>
+        </form>
+        <div id="login-status" class="status"></div>
+      </div>
+      <div class="card">
+        <h2>Create account</h2>
+        <p class="muted">Register with email and password. You can also sign in with Google or GitHub above.</p>
+        <form id="register-form">
+          <label for="register-name">Name</label>
+          <input id="register-name" name="name" type="text" placeholder="Jane Doe" required />
+          <label for="register-email">Email</label>
+          <input id="register-email" name="email" type="email" placeholder="jane@example.com" required />
+          <label for="register-password">Password</label>
+          <input id="register-password" name="password" type="password" placeholder="Choose a strong password" required />
+          <button type="submit">Create account</button>
+        </form>
+        <div id="register-status" class="status"></div>
+      </div>
     </div>
   </div>
   <script>
@@ -229,13 +290,13 @@ def _auth_page_html() -> str:
 # API ENDPOINTS
 # ============================================
 
-@app.get("/", response_class=HTMLResponse)
-@app.get("/login", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
 async def auth_page():
     """Serve the initial login/register page."""
     return HTMLResponse(_auth_page_html())
 
-@app.post("/api/auth/register")
+@app.post("/api/auth/register", tags=["auth"])
 async def register_user(payload: RegisterUserRequest, response: Response):
     """Create a sidecar user account and login session."""
     if len(payload.password) < 8:
@@ -260,7 +321,7 @@ async def register_user(payload: RegisterUserRequest, response: Response):
         "message": "Account created",
     }
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/login", tags=["auth"])
 async def login_user(payload: LoginUserRequest, response: Response):
     """Authenticate an existing user with email/password."""
     user = db_service.get_user_by_email(payload.email)
@@ -282,7 +343,7 @@ async def login_user(payload: LoginUserRequest, response: Response):
         "message": "Logged in",
     }
 
-@app.get("/api/auth/me")
+@app.get("/api/auth/me", tags=["auth"])
 async def get_current_user(session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
     """Return the current user associated with the session cookie."""
     if not session_token:
@@ -294,7 +355,7 @@ async def get_current_user(session_token: Optional[str] = Cookie(default=None, a
 
     return {"authenticated": True, "user": user}
 
-@app.post("/api/auth/logout")
+@app.post("/api/auth/logout", tags=["auth"])
 async def logout_user(response: Response, session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
     """Delete the current session."""
     if session_token:
@@ -302,7 +363,69 @@ async def logout_user(response: Response, session_token: Optional[str] = Cookie(
     response.delete_cookie(SESSION_COOKIE_NAME)
     return {"success": True, "message": "Logged out"}
 
-@app.post("/api/messages/classify", response_model=ActionResponse)
+@app.get("/api/auth/oauth/{provider}/start", tags=["auth"])
+async def oauth_start(provider: str):
+    """Redirect the browser to the OAuth provider's consent screen."""
+    if provider == "google":
+        if not _oauth.google_configured():
+            raise HTTPException(status_code=503, detail="Google OAuth is not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET missing)")
+        redirect_uri = f"{_OAUTH_REDIRECT_BASE}/api/auth/oauth/google/callback"
+        state = _oauth.generate_state("google")
+        url = _oauth.google_auth_url(redirect_uri, state)
+    elif provider == "github":
+        if not _oauth.github_configured():
+            raise HTTPException(status_code=503, detail="GitHub OAuth is not configured (GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET missing)")
+        redirect_uri = f"{_OAUTH_REDIRECT_BASE}/api/auth/oauth/github/callback"
+        state = _oauth.generate_state("github")
+        url = _oauth.github_auth_url(redirect_uri, state)
+    else:
+        raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider!r}")
+    return RedirectResponse(url)
+
+
+@app.get("/api/auth/oauth/{provider}/callback", tags=["auth"], include_in_schema=False)
+async def oauth_callback(provider: str, code: str = "", state: str = "", error: str = ""):
+    """
+    Receive the redirect from the OAuth provider.
+    Exchange the code for user info, upsert the user, set a session cookie.
+    """
+    if error:
+        raise HTTPException(status_code=400, detail=f"OAuth error from {provider}: {error}")
+
+    if not _oauth.consume_state(state):
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state — possible CSRF attempt")
+
+    try:
+        if provider == "google":
+            redirect_uri = f"{_OAUTH_REDIRECT_BASE}/api/auth/oauth/google/callback"
+            user_info = await _oauth.exchange_google_code(code, redirect_uri)
+        elif provider == "github":
+            redirect_uri = f"{_OAUTH_REDIRECT_BASE}/api/auth/oauth/github/callback"
+            user_info = await _oauth.exchange_github_code(code, redirect_uri)
+        else:
+            raise HTTPException(status_code=404, detail=f"Unknown OAuth provider: {provider!r}")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    user = db_service.upsert_oauth_user(
+        name=user_info["name"],
+        email=user_info["email"],
+        provider=provider,
+        sub=user_info["sub"],
+    )
+    if not user:
+        raise HTTPException(status_code=500, detail="Failed to upsert OAuth user")
+
+    token = create_session_token()
+    if not db_service.create_auth_session(user["id"], token, _session_expiry()):
+        raise HTTPException(status_code=500, detail="Failed to create auth session")
+
+    resp = RedirectResponse(url="/", status_code=302)
+    _set_session_cookie(resp, token)
+    return resp
+
+
+@app.post("/api/messages/classify", response_model=ActionResponse, tags=["messages"])
 async def classify_message_endpoint(message: IncomingMessage):
     """
     Unified message processing endpoint.
@@ -348,7 +471,7 @@ async def classify_message_endpoint(message: IncomingMessage):
         logger.error(f"Endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/user/status")
+@app.post("/api/user/status", tags=["user"])
 async def update_user_status(status: UserStatus):
     """Update user status (available/busy/dnd)"""
     success = db_service.update_user_status(
@@ -363,7 +486,7 @@ async def update_user_status(status: UserStatus):
     else:
         raise HTTPException(status_code=500, detail="Failed to update user status")
 
-@app.get("/api/user/status")
+@app.get("/api/user/status", tags=["user"])
 async def get_user_status(user_id: str = "default_user"):
     """Get current user status"""
     status_data = db_service.get_user_status(user_id)
@@ -373,19 +496,19 @@ async def get_user_status(user_id: str = "default_user"):
         "auto_reply_message": status_data["auto_reply"]
     }
 
-@app.get("/api/actions/pending")
+@app.get("/api/actions/pending", tags=["user"])
 async def get_pending_actions(limit: int = 50):
     """Get all pending actions"""
     actions = db_service.get_pending_actions(limit=limit)
     return {"actions": actions, "count": len(actions)}
 
-@app.get("/api/messages/recent")
+@app.get("/api/messages/recent", tags=["messages"])
 async def get_recent_messages(limit: int = 20):
     """Get recent messages"""
     messages = db_service.get_recent_messages(limit=limit)
     return {"messages": messages, "count": len(messages)}
 
-@app.get("/api/stats")
+@app.get("/api/stats", tags=["system"])
 async def get_stats():
     """Get system statistics"""
     stats = db_service.get_statistics()
@@ -399,7 +522,7 @@ async def get_stats():
         "classifier": "ollama" if classifier_service.ollama_available else "huggingface" if HF_API_KEY else "rule-based"
     }
 
-@app.get("/health")
+@app.get("/health", tags=["system"])
 async def health_check():
     """Health check endpoint"""
     return {
@@ -425,7 +548,7 @@ class MatrixWebhookEvent(BaseModel):
     origin_server_ts: int
     platform: Optional[str] = "whatsapp"
 
-@app.post("/api/messages/incoming")
+@app.post("/api/messages/incoming", tags=["messages"])
 async def incoming_message(event: MatrixWebhookEvent):
     """
     Receives raw Matrix events from the mautrix-whatsapp bridge webhook.
@@ -491,7 +614,7 @@ class BridgeLoginRequest(BaseModel):
     bridge_bot_id: Optional[str] = None  # overrides the default for the platform
 
 
-@app.post("/api/bridge/{platform}/login")
+@app.post("/api/bridge/{platform}/login", tags=["bridge"])
 async def bridge_login(platform: str, req: BridgeLoginRequest):
     """
     Initiate authentication for a mautrix bridge.
@@ -506,28 +629,34 @@ async def bridge_login(platform: str, req: BridgeLoginRequest):
     manager = _get_auth_manager()
     result = await manager.start_login(
         platform=platform,
-        bridge_bot_id=req.bridge_bot_id,
+        bridge_bot_id=_resolve_bridge_bot(platform, req.bridge_bot_id),
     )
     if result["status"] == "error":
         raise HTTPException(status_code=502, detail=result.get("error"))
     return result
 
 
-@app.get("/api/bridge/{platform}/status")
+@app.get("/api/bridge/{platform}/status", tags=["bridge"])
 async def bridge_status(platform: str, bridge_bot_id: Optional[str] = None):
     """Check whether the mautrix bridge is currently connected."""
     manager = _get_auth_manager()
-    return await manager.get_status(platform=platform, bridge_bot_id=bridge_bot_id)
+    return await manager.get_status(
+        platform=platform,
+        bridge_bot_id=_resolve_bridge_bot(platform, bridge_bot_id),
+    )
 
 
-@app.post("/api/bridge/{platform}/logout")
+@app.post("/api/bridge/{platform}/logout", tags=["bridge"])
 async def bridge_logout(platform: str, bridge_bot_id: Optional[str] = None):
     """Disconnect the mautrix bridge for the given platform."""
     manager = _get_auth_manager()
-    return await manager.logout(platform=platform, bridge_bot_id=bridge_bot_id)
+    return await manager.logout(
+        platform=platform,
+        bridge_bot_id=_resolve_bridge_bot(platform, bridge_bot_id),
+    )
 
 
-@app.get("/api/bridge/{platform}/qr")
+@app.get("/api/bridge/{platform}/qr", tags=["bridge"])
 async def bridge_qr(platform: str):
     """
     Return the most recently received QR code for the platform (if any).
