@@ -14,21 +14,21 @@ All combined into a single unified service pipeline.
 from fastapi import FastAPI, HTTPException, Response, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 import re
 import uvicorn
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 # Import unified services
 from .database import DatabaseService
 from .message_service import (
     MessageClassificationService,
-    ActionDecisionService,
     UnifiedMessageService
 )
 from .auth import hash_password, verify_password, create_session_token
 from . import oauth as _oauth
+from .dev_guide import render as _dev_guide_html
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -166,7 +166,7 @@ class LoginUserRequest(BaseModel):
 
 
 def _session_expiry() -> str:
-    return (datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
+    return (datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -289,6 +289,12 @@ def _auth_page_html() -> str:
 # ============================================
 # API ENDPOINTS
 # ============================================
+
+@app.get("/dev", response_class=HTMLResponse, include_in_schema=False)
+async def dev_guide():
+    """Frontend developer integration guide with all endpoints, examples, and a copy-paste JS client."""
+    return HTMLResponse(_dev_guide_html())
+
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
@@ -681,7 +687,7 @@ _SIDECAR_URL      = os.getenv("SIDECAR_URL", "http://localhost:8080").rstrip("/"
 _SSO_CALLBACK_URL = f"{_SIDECAR_URL}/api/auth/sso/callback"
 
 # Holds the pending loginToken between the /start and /callback calls
-_pending_login_token: dict = {"value": None, "ready": False}
+_pending_login_token: Dict[str, Any] = {"value": None, "ready": False}
 
 
 def _sso_redirect_url(homeserver: str, callback_url: str) -> str:
@@ -718,7 +724,7 @@ def _write_token_to_env(access_token: str) -> None:
     open(env_path, "w").write(new_text)
 
 
-@app.get("/api/auth/sso/start")
+@app.get("/api/auth/sso/start", tags=["auth"], include_in_schema=False)
 async def sso_start():
     """
     Step 1 — Returns the Beeper SSO login URL.
@@ -734,7 +740,7 @@ async def sso_start():
     }
 
 
-@app.get("/api/auth/sso/callback")
+@app.get("/api/auth/sso/callback", tags=["auth"], include_in_schema=False)
 async def sso_callback(loginToken: str):
     """
     Step 2 — Receives the loginToken from Beeper after SSO redirect.
@@ -777,7 +783,7 @@ async def sso_callback(loginToken: str):
     )
 
 
-@app.get("/api/auth/status")
+@app.get("/api/auth/status", tags=["auth"])
 async def auth_status():
     """
     Check whether the current MATRIX_ACCESS_TOKEN is valid by calling
@@ -821,7 +827,7 @@ class OnboardStartRequest(BaseModel):
     user_id: str   # your app's user identifier (email, UUID, etc.)
 
 
-@app.post("/api/onboard/whatsapp/start")
+@app.post("/api/onboard/whatsapp/start", tags=["onboarding"])
 async def onboard_start(req: OnboardStartRequest):
     """
     Begin WhatsApp onboarding for a user.
@@ -840,7 +846,7 @@ async def onboard_start(req: OnboardStartRequest):
     return result
 
 
-@app.get("/api/onboard/whatsapp/qr/{session_id}")
+@app.get("/api/onboard/whatsapp/qr/{session_id}", tags=["onboarding"])
 async def onboard_qr(session_id: str):
     """
     Return the latest QR code for an active onboarding session.
@@ -856,7 +862,7 @@ async def onboard_qr(session_id: str):
     return result
 
 
-@app.get("/api/onboard/whatsapp/status/{session_id}")
+@app.get("/api/onboard/whatsapp/status/{session_id}", tags=["onboarding"])
 async def onboard_status(session_id: str):
     """
     Poll WhatsApp connection status for an onboarding session.
@@ -876,7 +882,7 @@ async def onboard_status(session_id: str):
     return result
 
 
-@app.delete("/api/onboard/whatsapp/session/{session_id}")
+@app.delete("/api/onboard/whatsapp/session/{session_id}", tags=["onboarding"])
 async def onboard_cancel(session_id: str):
     """
     Cancel and clean up an onboarding session.
