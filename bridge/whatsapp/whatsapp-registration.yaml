@@ -1,0 +1,14 @@
+id: whatsapp
+url: http://mautrix-whatsapp:29318
+as_token: UoNYZetxhxkcVeETp3MZRFLpBDLB6ak2QvvfeM8OP6CFu7fYdTRfPssyOmrG9K16
+hs_token: 2UUSQT9jzBrf7dO2ae2U1VipxdmQybaUrQfqVgfEfUWJAO8PAicltK6yfeCqCCgB
+sender_localpart: OKYjsoQdfMyAIevVCzoDMapzyDiG4eqv
+rate_limited: false
+namespaces:
+    users:
+        - regex: ^@whatsappbot:localhost$
+          exclusive: true
+        - regex: ^@whatsapp_.*:localhost$
+          exclusive: true
+de.sorunome.msc2409.push_ephemeral: true
+receive_ephemeral: true
