@@ -1,198 +1,248 @@
-Nexa Beeper Connector
-======================
+# Nexa — AI Sidecar for WhatsApp & LinkedIn
 
-Description
------------
-Nexa Beeper Connector is an intelligent message routing system that listens for messages (e.g., from Matrix, WhatsApp), classifies them using AI/ML models, decides appropriate actions, persists those actions, and exposes APIs for inspection and management. 
+An AI-powered message routing system that receives messages from WhatsApp and LinkedIn via a self-hosted Matrix stack, classifies them using LLMs, and executes smart actions (notify, escalate, suppress).
 
-The system is designed to be lightweight, self-contained, and easily deployable in local or small-scale environments.
+---
 
-Key Features
-------------
-- **Login & Session Auth Starter**: Browser-based login/register page with name, email, password, and sidecar session cookies
-- **AI-Powered Message Classification**: Classifies messages by priority (urgent, high, normal, low) and category (work, personal, social, marketing)
-- **Multi-Backend LLM Support**: Supports Ollama (local), OpenAI, Anthropic Claude, Hugging Face, or custom API backends
-- **Flexible Fallback System**: Rule-based classification falls back when LLMs are unavailable
-- **User Status Management**: Track user availability (available, busy, do-not-disturb) with auto-responses
-- **Action Decision Engine**: Decides what action to take based on classification and user status
-- **RESTful API**: Complete HTTP API for classification, status management, and metrics
-- **Persistent Storage**: SQLite database for messages, actions, and user state
-- **Real-time Interactive CLI**: Test the system with interactive message input
+## How it works
 
-Directory roles
----------------
-- **ai/**
-  - Contains the AI pipeline: classification modules, normalization, and policy decision code
-  - `classifier.py`: Base classifier interface
-  - `cloud_classifier.py`: Cloud-based LLM classifiers (OpenAI, Anthropic, HuggingFace, custom APIs)
-  - `local_model.py`: Local model support
-  - `rule_based.py`: Rule-based fallback classifier
-  - `pipeline.py`: Orchestrates classification pipeline
-
-- **sidecar/**
-  - Main FastAPI service that handles message classification
-  - Accepts messages via HTTP API, runs classification, stores results
-  - Provides endpoints for:
-    - Auth UI: `GET /` and `GET /login`
-    - Auth APIs: `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`
-    - Message classification: `POST /api/messages/classify`
-    - User status management: `GET/POST /api/user/status`
-    - Pending actions: `GET /api/actions/pending`
-    - Recent messages: `GET /api/messages/recent`
-    - System stats: `GET /api/stats`
-    - Health check: `GET /health`
-
-- **bridge/**
-  - Execution bridge that processes pending actions
-  - Claims actions, executes them (notify, escalate, etc.)
-  - Maintains cursor for ordered processing and restart resilience
-  - Database integration and idempotency handling
-
-- **tests/**
-  - Integration tests and demo scripts
-  - `test_demo.py`: Automated demo showing different user statuses
-  - `interactive_demo.py`: Interactive CLI for real-time testing
-  - End-to-end workflow testing
-
-- **config/**
-  - Application configuration and settings
-
-Configuration
---------------
-Environment variables:
-- `OLLAMA_URL`: Ollama server URL (default: http://localhost:11435)
-- `OLLAMA_MODEL`: Model to use with Ollama (default: llama3.2:1b)
-- `USE_OLLAMA`: Enable Ollama (default: true)
-- `HF_API_KEY`: Hugging Face API key for cloud classification
-- `DB_PATH`: SQLite database path (default: data/nexa.db)
-- `MATRIX_HOMESERVER`: Matrix homeserver base URL for bot/client mode
-- `MATRIX_ACCESS_TOKEN`: Matrix access token for bot/client mode
-- `MATRIX_USER`: Matrix user ID for the bot/client
-- `MAUTRIX_HOMESERVER`: Preferred homeserver base URL for bridge execution mode
-- `MAUTRIX_ACCESS_TOKEN`: Preferred access token for bridge execution mode
-- `MAUTRIX_IMPERSONATE_USER_ID`: Optional appservice user ID to masquerade as when sending into bridged rooms
-- `MAUTRIX_DEVICE_ID`: Optional device ID to include when using application-service identity assertion
-
-Mautrix / bridge execution
---------------------------
-The bridge executor sends outbound messages by posting `m.room.message` events
-to Matrix rooms. When those rooms are bridged by mautrix-whatsapp, the bridge
-forwards the messages to WhatsApp.
-
-The outbound adapter supports two authentication modes:
-
-1. **Bot/client token mode**
-   - set `MATRIX_HOMESERVER` + `MATRIX_ACCESS_TOKEN`, or
-   - set `MAUTRIX_HOMESERVER` + `MAUTRIX_ACCESS_TOKEN`
-
-2. **Application-service masquerading mode**
-   - set `MAUTRIX_HOMESERVER`
-   - set `MAUTRIX_ACCESS_TOKEN` to the appservice token
-   - set `MAUTRIX_IMPERSONATE_USER_ID` to the Matrix user ID the appservice
-     should send as
-   - optionally set `MAUTRIX_DEVICE_ID`
-
-In both cases, the bridge uses Matrix transaction IDs for idempotent sends, so
-the same executor retry will reuse the same `txnId`.
-
-API Endpoints
--------------
-**Classification**
-- `POST /api/messages/classify` - Classify a message
-  - Returns: priority, action type, classification details
-
-**Authentication**
-- `GET /` or `GET /login` - Login/register page
-- `POST /api/auth/register` - Create account with name, email, password
-- `POST /api/auth/login` - Login with email and password
-- `GET /api/auth/me` - Read current session user
-- `POST /api/auth/logout` - Clear current session
-
-**User Status**
-- `GET /api/user/status?user_id=default_user` - Get user status
-- `POST /api/user/status` - Update user status (available/busy/dnd)
-
-**Actions & Messages**
-- `GET /api/actions/pending` - Get pending actions
-- `GET /api/messages/recent?limit=20` - Get recent messages
-
-**Metrics**
-- `GET /api/stats` - Get system statistics
-- `GET /health` - Health check
-
-Quick Start
------------
-1. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Start Ollama** (optional, for local LLM):
-   ```bash
-   ollama serve
-   ```
-
-3. **Run the sidecar service**:
-   ```bash
-   python sidecar/main.py
-   ```
-   Server starts at `http://localhost:8000`
-
-4. **Test with interactive demo**:
-   ```bash
-   python tests/interactive_demo.py
-   ```
-
-5. **Or run automated demo**:
-   ```bash
-   python tests/test_demo.py
-   ```
-
-Interactive Demo Commands
---------------------------
-Once running `python tests/interactive_demo.py`:
-- Type any message → instant classification
-- `status` → show current user status
-- `available` / `busy` / `dnd` → change status
-- `stats` → show system statistics
-- `help` → show all commands
-- `quit` / `exit` → exit
-
-Example:
 ```
-> Hey, can we meet tomorrow?
-[Classification: normal priority, personal]
-
-> URGENT: Production server down!!!
-[Classification: urgent priority, work]
-
-> status
-[Current status: available]
-
-> busy
-[Status changed to busy]
+WhatsApp ─┐
+          ├─▶ mautrix bridges ─▶ Synapse (Matrix) ─▶ nexa-sidecar ─▶ classify ─▶ decide ─▶ store ─▶ executor
+LinkedIn ─┘
 ```
 
-Database Schema
----------------
-- **messages**: Stores incoming messages with classification results
-- **actions**: Stores pending/executed actions per message
-- **user_status**: Tracks user availability and auto-reply settings
+1. Messages arrive on WhatsApp or LinkedIn
+2. mautrix bridges forward them as Matrix events to Synapse
+3. The nexa-sidecar receives the events, classifies them with AI, and stores an action
+4. The executor delivers responses back through the bridge
 
-Notes
------
-- The project uses SQLite for lightweight persistence, ideal for local deployments
-- Multiple classification backends allow upgrading AI capabilities without changing code
-- Backward-compatible schema migrations avoid breaking development environments
-- All components are designed to be independently testable and replaceable
+---
 
-Contributing
-------------
-- Add or update tests when changing behavior around classification, persistence, or execution
-- If modifying DB schema, add migration tests to the `tests/` directory
-- Follow the modular design: classifier implementations should be swappable
+## Stack
 
-Project Status
---------------
-Branch: `Integrating_classifier`
-Currently integrating cloud-based LLM classifiers (OpenAI, Claude, HuggingFace) with local Ollama fallback
+| Service | Image | Purpose |
+|---|---|---|
+| `conduit` | `ghcr.io/element-hq/synapse:latest` | Matrix homeserver (Synapse, spec v1.12) |
+| `mautrix-whatsapp` | `dock.mau.dev/mautrix/whatsapp:latest` | WhatsApp ↔ Matrix bridge |
+| `mautrix-linkedin` | `dock.mau.dev/mautrix/linkedin:latest` | LinkedIn ↔ Matrix bridge |
+| `nexa-sidecar` | local build | AI classification + REST API |
+
+---
+
+## Quick start
+
+**Prerequisites:** Docker Desktop running, Python 3.10+
+
+```bash
+# 1. Clone and install Python deps
+pip install -r requirements.txt
+
+# 2. One-time setup (generates configs, registers admin, starts all services)
+python bridge/auth/setup.py
+
+# 3. The full stack is now running
+#    Sidecar API:  http://localhost:8080
+#    Matrix:       http://localhost:6167
+```
+
+That's it. `setup.py` is idempotent — safe to re-run.
+
+### What setup.py does
+
+1. Generates `bridge/whatsapp/whatsapp-registration.yaml` and `bridge/linkedin/linkedin-registration.yaml`
+2. Generates `bridge/synapse/homeserver.yaml` with fresh secrets
+3. Starts Synapse, waits for it to be ready
+4. Registers `@admin:localhost` as a Synapse server admin (required for user impersonation)
+5. Starts both mautrix bridges and the nexa-sidecar
+
+---
+
+## User onboarding
+
+### WhatsApp
+
+```
+POST http://localhost:8080/api/onboard/whatsapp/start
+Body: { "user_id": "alice" }
+
+→ Returns session_id + QR code (base64 PNG)
+→ User scans QR with WhatsApp on their phone
+→ Poll GET /api/onboard/whatsapp/status/{session_id} every 3s until "connected"
+```
+
+### LinkedIn
+
+LinkedIn uses cookie-based auth (no QR code):
+
+1. DM `@linkedinbot:localhost` in a Matrix client
+2. Send: `login`
+3. In your browser, open LinkedIn → DevTools → Network tab → find any GraphQL XHR request → right-click → Copy as cURL
+4. Paste the cURL command to the bridge bot
+
+---
+
+## Authentication
+
+The sidecar has its own user accounts (separate from Matrix accounts).
+
+| Method | How |
+|---|---|
+| Email + password | `POST /api/auth/register` then `POST /api/auth/login` |
+| Sign in with Google | `GET /api/auth/oauth/google/start` — browser redirect |
+| Sign in with GitHub | `GET /api/auth/oauth/github/start` — browser redirect |
+
+All auth sets an `HttpOnly` session cookie (`nexa_session`, 24h TTL). Include `credentials: 'include'` in all browser `fetch()` calls.
+
+Login page: `http://localhost:8080`
+
+---
+
+## API reference
+
+| URL | What |
+|---|---|
+| `http://localhost:8080/dev` | Frontend developer guide — all endpoints with examples and a copy-paste JS client |
+| `http://localhost:8080/docs` | Swagger UI — interactive, try any endpoint live |
+| `http://localhost:8080/redoc` | ReDoc — clean read-only reference |
+
+### Endpoint groups
+
+**Auth** — register, login, logout, OAuth (Google / GitHub), session check
+
+**Onboarding** — WhatsApp QR flow (`/api/onboard/whatsapp/*`)
+
+**Bridge** — connect / disconnect WhatsApp and LinkedIn (`/api/bridge/{platform}/*`)
+
+**Messages** — classify incoming messages, retrieve history (`/api/messages/*`)
+
+**User** — availability status, pending actions (`/api/user/status`, `/api/actions/pending`)
+
+**System** — health check (`/health`), statistics (`/api/stats`)
+
+---
+
+## AI classification
+
+Messages are classified into:
+
+| Label | Action |
+|---|---|
+| `ENQUIRY` | NOTIFY |
+| `INTENT` | ESCALATE |
+| `PROMOTION` | IGNORE |
+| `SOCIAL` | IGNORE |
+
+Three-tier fallback:
+
+1. **Ollama** (local) — `llama3.2:1b` by default, configurable
+2. **HuggingFace** (cloud) — `Mistral-7B-Instruct-v0.2`
+3. **Rule-based** — regex fallback, always works offline
+
+---
+
+## Environment variables
+
+```env
+# Matrix
+MATRIX_HOMESERVER=http://conduit:8008
+MATRIX_SERVER_NAME=localhost
+MATRIX_USER=@admin:localhost
+MATRIX_ACCESS_TOKEN=<generated by setup.py>
+
+# Bridge bots
+WHATSAPP_BRIDGE_BOT=@whatsappbot:localhost
+LINKEDIN_BRIDGE_BOT=@linkedinbot:localhost
+
+# AI
+OLLAMA_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=llama3.2:1b
+HF_API_KEY=<optional>
+
+# OAuth (optional — omit to disable social login buttons)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+OAUTH_REDIRECT_BASE_URL=http://localhost:8080
+
+# Sidecar
+DB_PATH=/data/nexa.db
+AUTH_SESSION_TTL_HOURS=24
+```
+
+All values are auto-populated in `.env` by `setup.py`. Only OAuth credentials need to be added manually.
+
+---
+
+## Project layout
+
+```
+bridge/
+  auth/
+    setup.py          — one-time infrastructure setup script
+  synapse/
+    homeserver.yaml   — generated Synapse config (gitignored)
+    logging.yaml      — Synapse log config
+  whatsapp/
+    config.yaml       — mautrix-whatsapp bridge config
+    whatsapp-registration.yaml — generated appservice registration
+  linkedin/
+    config.yaml       — mautrix-linkedin bridge config
+    linkedin-registration.yaml — generated appservice registration
+  adapters/
+    mautrix.py        — MautrixSender: sends Matrix messages back to bridges
+  executor/
+    loop.py           — executor_loop: claim → execute → retry with backoff
+
+sidecar/
+  main.py             — FastAPI app, all HTTP endpoints
+  database.py         — DatabaseService: thread-safe SQLite
+  message_service.py  — classification + action decision pipeline
+  auth.py             — PBKDF2-SHA256 password hashing, session tokens
+  oauth.py            — Google and GitHub OAuth2 flows
+  onboarding.py       — WhatsApp QR onboarding via Matrix DM
+  dev_guide.py        — HTML developer guide served at /dev
+
+app.py                — Matrix event listener (matrix-nio)
+docker-compose.yaml   — Full stack definition
+```
+
+---
+
+## Docker commands
+
+```bash
+# Start everything
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Restart just the sidecar after code changes
+docker-compose restart nexa-sidecar
+
+# Stop everything
+docker-compose down
+
+# Full reset (deletes all data including Matrix DB)
+docker-compose down -v
+python bridge/auth/setup.py   # re-run setup after volume wipe
+```
+
+---
+
+## Setting up OAuth
+
+### Google
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials
+2. Create OAuth 2.0 Client ID (Web application)
+3. Add `http://localhost:8080/api/auth/oauth/google/callback` to Authorized redirect URIs
+4. Copy Client ID and Client Secret to `.env`
+
+### GitHub
+
+1. Go to GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
+2. Set Authorization callback URL to `http://localhost:8080/api/auth/oauth/github/callback`
+3. Copy Client ID and Client Secret to `.env`
