@@ -84,11 +84,24 @@ class DatabaseService:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL,
                         email TEXT NOT NULL UNIQUE,
-                        password_hash TEXT NOT NULL,
+                        password_hash TEXT,
+                        oauth_provider TEXT,
+                        oauth_sub TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+
+                # Migration: add OAuth columns to existing databases that
+                # were created before this schema version.
+                for _col_sql in [
+                    "ALTER TABLE users ADD COLUMN oauth_provider TEXT",
+                    "ALTER TABLE users ADD COLUMN oauth_sub TEXT",
+                ]:
+                    try:
+                        cursor.execute(_col_sql)
+                    except sqlite3.OperationalError:
+                        pass  # column already exists
 
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -435,6 +448,44 @@ class DatabaseService:
                 return None
             except Exception as e:
                 logger.error(f"Failed to create user {normalized_email}: {e}")
+                conn.rollback()
+                return None
+            finally:
+                conn.close()
+
+    def upsert_oauth_user(
+        self, name: str, email: str, provider: str, sub: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create or update a user authenticated via an OAuth provider.
+
+        If a user with the same email already exists, update their name and
+        OAuth fields so they can sign in via OAuth even if they registered
+        with a password originally.  Returns the user dict on success.
+        """
+        normalized_email = email.strip().lower()
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                    INSERT INTO users (name, email, oauth_provider, oauth_sub, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        name           = excluded.name,
+                        oauth_provider = excluded.oauth_provider,
+                        oauth_sub      = excluded.oauth_sub,
+                        updated_at     = CURRENT_TIMESTAMP
+                """, (name.strip(), normalized_email, provider, sub))
+                conn.commit()
+                cursor.execute(
+                    "SELECT id, name, email FROM users WHERE email = ? LIMIT 1",
+                    (normalized_email,),
+                )
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            except Exception as e:
+                logger.error(f"Failed to upsert OAuth user {normalized_email}: {e}")
                 conn.rollback()
                 return None
             finally:
