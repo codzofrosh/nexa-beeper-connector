@@ -13,6 +13,7 @@ All combined into a single unified service pipeline.
 
 from fastapi import FastAPI, HTTPException, Response, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import re
@@ -54,6 +55,15 @@ app = FastAPI(
         {"name": "system",     "description": "Health check and statistics"},
     ],
 )
+_ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:3000,http://localhost:5173").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,   # needed for session cookie
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 SESSION_COOKIE_NAME = "nexa_session"
 SESSION_TTL_HOURS = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
 
