@@ -121,10 +121,9 @@ services:
       uvicorn sidecar.main:app --host 0.0.0.0 --port 8080 --workers 1
 
   # ── React frontend (nginx) ────────────────────────────────────────────────
+  # Image is built and pushed by Nexa-FrontEnd repo CI → ghcr.io/codzofrosh/nexa-frontend
   nexa-frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/codzofrosh/nexa-frontend:latest
     container_name: nexa-frontend
     restart: unless-stopped
     depends_on:
