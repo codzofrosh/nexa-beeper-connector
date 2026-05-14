@@ -39,6 +39,7 @@ services:
       - ./bridge/synapse/logging.yaml:/config/logging.yaml:ro
       - ./bridge/whatsapp/whatsapp-registration.yaml:/config/whatsapp-registration.yaml:ro
       - ./bridge/linkedin/linkedin-registration.yaml:/config/linkedin-registration.yaml:ro
+      - ./bridge/instagram/instagram-registration.yaml:/config/instagram-registration.yaml:ro
       # Data volume — fully writable, Synapse stores DB / signing key / media here
       - synapse_data:/data
     ports:
@@ -72,6 +73,19 @@ services:
     networks:
       - nexa-network
 
+  # ── mautrix-meta bridge (Instagram DMs) ──────────────────────────────────
+  mautrix-instagram:
+    image: dock.mau.dev/mautrix/meta:latest
+    container_name: nexa-instagram-bridge
+    restart: unless-stopped
+    depends_on:
+      - conduit
+    volumes:
+      - ./bridge/instagram/config.yaml:/data/config.yaml:ro
+      - instagram_data:/data
+    networks:
+      - nexa-network
+
   # ── Nexa sidecar (AI + API) ───────────────────────────────────────────────
   nexa-sidecar:
     build: .
@@ -90,6 +104,7 @@ services:
       # Bridge bots (created by their respective bridges on first run)
       WHATSAPP_BRIDGE_BOT:   "@whatsappbot:${MATRIX_SERVER_NAME:-localhost}"
       LINKEDIN_BRIDGE_BOT:   "@linkedinbot:${MATRIX_SERVER_NAME:-localhost}"
+      INSTAGRAM_BRIDGE_BOT:  "@instagrambot:${MATRIX_SERVER_NAME:-localhost}"
 
       # Sidecar config
       ENABLE_EXECUTOR:  "1"
@@ -140,6 +155,7 @@ volumes:
   synapse_data:
   whatsapp_data:
   linkedin_data:
+  instagram_data:
 
 networks:
   nexa-network:

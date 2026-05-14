@@ -92,8 +92,9 @@ _BRIDGE_BOT_ID      = os.getenv(
 
 # Platform → bridge bot Matrix ID (env vars take priority over defaults)
 _PLATFORM_BOT_IDS: dict = {
-    "whatsapp": os.getenv("WHATSAPP_BRIDGE_BOT", f"@whatsappbot:{_MATRIX_SERVER_NAME}"),
-    "linkedin": os.getenv("LINKEDIN_BRIDGE_BOT", f"@linkedinbot:{_MATRIX_SERVER_NAME}"),
+    "whatsapp":  os.getenv("WHATSAPP_BRIDGE_BOT",  f"@whatsappbot:{_MATRIX_SERVER_NAME}"),
+    "linkedin":  os.getenv("LINKEDIN_BRIDGE_BOT",  f"@linkedinbot:{_MATRIX_SERVER_NAME}"),
+    "instagram": os.getenv("INSTAGRAM_BRIDGE_BOT", f"@instagrambot:{_MATRIX_SERVER_NAME}"),
 }
 
 
