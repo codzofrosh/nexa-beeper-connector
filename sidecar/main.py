@@ -95,6 +95,7 @@ _PLATFORM_BOT_IDS: dict = {
     "whatsapp":  os.getenv("WHATSAPP_BRIDGE_BOT",  f"@whatsappbot:{_MATRIX_SERVER_NAME}"),
     "linkedin":  os.getenv("LINKEDIN_BRIDGE_BOT",  f"@linkedinbot:{_MATRIX_SERVER_NAME}"),
     "instagram": os.getenv("INSTAGRAM_BRIDGE_BOT", f"@instagrambot:{_MATRIX_SERVER_NAME}"),
+    "twitter":   os.getenv("TWITTER_BRIDGE_BOT",   f"@twitterbot:{_MATRIX_SERVER_NAME}"),
 }
 
 
@@ -696,10 +697,6 @@ async def bridge_qr(platform: str):
 # Sidecar public URL (used for SSO callback)
 _SIDECAR_URL      = os.getenv("SIDECAR_URL", "http://localhost:8080").rstrip("/")
 _SSO_CALLBACK_URL = f"{_SIDECAR_URL}/api/auth/sso/callback"
-
-# Holds the pending loginToken between the /start and /callback calls
-_pending_login_token: Dict[str, Any] = {"value": None, "ready": False}
-
 
 def _sso_redirect_url(homeserver: str, callback_url: str) -> str:
     from urllib.parse import quote
