@@ -84,6 +84,7 @@ class DatabaseService:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL,
                         email TEXT NOT NULL UNIQUE,
+                        phone TEXT,
                         password_hash TEXT,
                         oauth_provider TEXT,
                         oauth_sub TEXT,
@@ -92,11 +93,10 @@ class DatabaseService:
                     )
                 """)
 
-                # Migration: add OAuth columns to existing databases that
-                # were created before this schema version.
                 for _col_sql in [
                     "ALTER TABLE users ADD COLUMN oauth_provider TEXT",
                     "ALTER TABLE users ADD COLUMN oauth_sub TEXT",
+                    "ALTER TABLE users ADD COLUMN phone TEXT",
                 ]:
                     try:
                         cursor.execute(_col_sql)
@@ -424,24 +424,26 @@ class DatabaseService:
             finally:
                 conn.close()
 
-    def create_user(self, name: str, email: str, password_hash: str) -> Optional[Dict[str, Any]]:
+    def create_user(self, name: str, email: str, password_hash: str, phone: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Create a user account and return the created user."""
         normalized_email = email.strip().lower()
+        phone_val = phone.strip() if phone else None
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             try:
                 cursor.execute("""
-                    INSERT INTO users (name, email, password_hash, updated_at)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                """, (name.strip(), normalized_email, password_hash))
+                    INSERT INTO users (name, email, phone, password_hash, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (name.strip(), normalized_email, phone_val, password_hash))
                 conn.commit()
                 user_id = cursor.lastrowid
                 return {
                     "id": user_id,
                     "name": name.strip(),
                     "email": normalized_email,
+                    "phone": phone_val,
                 }
             except sqlite3.IntegrityError:
                 logger.info(f"User already exists: {normalized_email}")
@@ -500,7 +502,7 @@ class DatabaseService:
 
             try:
                 cursor.execute("""
-                    SELECT id, name, email, password_hash, created_at, updated_at
+                    SELECT id, name, email, phone, password_hash, created_at, updated_at
                     FROM users
                     WHERE email = ?
                     LIMIT 1
@@ -518,7 +520,7 @@ class DatabaseService:
 
             try:
                 cursor.execute("""
-                    SELECT id, name, email, created_at, updated_at
+                    SELECT id, name, email, phone, created_at, updated_at
                     FROM users
                     WHERE id = ?
                     LIMIT 1
@@ -556,7 +558,7 @@ class DatabaseService:
 
             try:
                 cursor.execute("""
-                    SELECT u.id, u.name, u.email, s.expires_at
+                    SELECT u.id, u.name, u.email, u.phone, s.expires_at
                     FROM auth_sessions s
                     JOIN users u ON u.id = s.user_id
                     WHERE s.token = ?

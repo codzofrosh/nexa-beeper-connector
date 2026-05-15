@@ -171,6 +171,7 @@ class RegisterUserRequest(BaseModel):
     name: str
     email: str
     password: str
+    phone: Optional[str] = None
 
 class LoginUserRequest(BaseModel):
     email: str
@@ -324,6 +325,7 @@ async def register_user(payload: RegisterUserRequest, response: Response):
         name=payload.name,
         email=payload.email,
         password_hash=hash_password(payload.password),
+        phone=payload.phone,
     )
     if not created_user:
         raise HTTPException(status_code=409, detail="An account with that email already exists")
